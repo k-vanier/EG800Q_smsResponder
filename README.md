@@ -1,6 +1,6 @@
-# EG800Q-EU
+# EG800Q_smsResponder
 
-Tests and tools for the **Quectel EG800Q-EU**, an LTE Cat 1 bis module for Europe.
+SMS responder built on the **Quectel EG800Q-EU**, an LTE Cat 1 bis module for Europe: every SMS the module receives is answered by Claude, in French, in a single SMS (`tools/sms_claude.py`, runs on FreeBSD). The folder also holds an SMS time server and tools to test the module.
 
 ## Module
 
