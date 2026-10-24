@@ -63,6 +63,7 @@ Conversations and politeness:
 
 - A **conversation** is all the SMS from one number. It ends after 30 minutes without SMS from that number (`--conversation-timeout MINUTES`), and after a restart of the script.
 - The first SMS of a conversation must **start with "Bonjour" or "Bonsoir"** (any case, accents ignored). Otherwise the sender gets `La politesse avant tout : commencez par « Bonjour » et je répondrai avec plaisir à votre message.`, without calling Claude, and the conversation does not start.
+- The answer to that first SMS starts with Claude introducing itself: an AI by Anthropic that answers in SMS format. If the greeting also asks something ("Bonjour, quelle heure est-il ?"), Claude answers it right after.
 - Within a conversation, Claude gets the last 10 exchanges with that number as previous messages, so a follow-up question keeps its context.
 
 Claude:

@@ -50,6 +50,11 @@ SYSTEM_PROMPT = """Tu réponds à des SMS. Ta réponse est renvoyée telle quell
   des horaires ou d'autres faits récents. Tu ne peux rien faire d'autre. Si tu ne sais pas, dis-le brièvement.
 - Si la conversation a déjà commencé, ses échanges précédents sont donnés avant le nouveau message.
 Date et heure actuelles : {now}."""
+# Added to SYSTEM_PROMPT for the first message of a conversation (the greeting)
+INTRO_PROMPT = """
+Ce message ouvre la conversation : présente-toi d'abord en disant que tu es Claude, une IA
+d'Anthropic, et que tu réponds au format SMS (messages courts). S'il contient une question,
+réponds-y ensuite, toujours dans les 150 caractères."""
 
 
 def is_greeting(text):
@@ -71,7 +76,7 @@ def ask_claude(text, history, model, claude='claude'):
 	now = datetime.datetime.now()
 	now = '%s %d %s %d, %s' % (DAYS[now.weekday()], now.day, MONTHS[now.month - 1], now.year, now.strftime('%H:%M'))
 	cmd = [claude, '-p',
-		'--system-prompt', SYSTEM_PROMPT.format(now=now),
+		'--system-prompt', SYSTEM_PROMPT.format(now=now) + ('' if history else INTRO_PROMPT),
 		# Anyone who knows the number can send a prompt, so the only tool is
 		# WebSearch: it runs on Anthropic's side. No WebFetch, which would load
 		# pages from this machine and could reach the local network.
