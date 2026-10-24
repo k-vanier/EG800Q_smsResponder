@@ -4,10 +4,13 @@
 
 import datetime
 import re
+import subprocess
+import sys
 import time
 import unicodedata
 
 import serial
+import serial.tools.list_ports
 
 SCAN_PERIOD = 5  # seconds between two checks for unread SMS
 SMS_LENGTH = 160  # GSM 7-bit characters in a single SMS
@@ -16,6 +19,10 @@ COMMAND_TIMEOUT = 20  # seconds; the module can take more than 5 s right after s
 SEND_TIMEOUT = 120  # seconds; Quectel gives 120 s as the maximum response time of AT+CMGS
 DONE_GRACE = 5  # seconds to wait for OK once a reply already proves success
 BATTERY_PERIOD = 60  # seconds between two battery voltage readings in the log
+# First field of +CBC; the module's USB port only charges the battery, data
+# goes through the UART
+CHARGE_STATES = {'0': 'not charging', '1': 'charging', '2': 'charged'}
+FTDI_VID = 0x0403  # USB vendor of the FTDI adapter wired to the module's UART
 
 # GSM 03.38 basic character set: the module sends and expects these codes
 # in text mode with AT+CSCS="GSM" (for example 0x04 is "è").
@@ -107,6 +114,27 @@ def log(msg):
 	print(datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S'), msg, flush=True)
 
 
+def find_ftdi_port():
+	"""Returns the serial port of the FTDI adapter wired to the module's UART.
+
+	Its number can change from one boot to the next (another USB serial
+	device, or the module's own USB port when it is plugged in to charge),
+	so "auto" finds it by its driver instead."""
+	if sys.platform.startswith('freebsd'):
+		# pyserial cannot tell USB devices apart on FreeBSD: the uftdi(4) driver
+		# gives the tty name of each adapter, e.g. dev.uftdi.0.ttyname: U1
+		for unit in range(32):
+			result = subprocess.run(['sysctl', '-n', 'dev.uftdi.%d.ttyname' % unit],
+				capture_output=True, text=True)
+			if result.returncode == 0 and result.stdout.strip():
+				return '/dev/cua' + result.stdout.strip()
+	else:
+		for port in serial.tools.list_ports.comports():
+			if port.vid == FTDI_VID:
+				return port.device
+	raise ModemError('no FTDI serial adapter found')
+
+
 def is_phone_number(sender):
 	# Real phone numbers only, never operator short codes
 	return re.fullmatch(r'\+?\d{10,15}', sender) is not None
@@ -114,6 +142,10 @@ def is_phone_number(sender):
 
 class Modem:
 	def __init__(self, port, trace=False):
+		if port == 'auto':
+			port = find_ftdi_port()
+			log('FTDI adapter found on %s' % port)
+		self.port = port
 		self.ser = serial.Serial(port, 115200, timeout=0.5)
 		self.trace = trace  # log every byte written to and read from the module
 		self.new_sms = False  # set by +CMTI to scan without waiting
@@ -233,12 +265,13 @@ class Modem:
 	def delete_sms(self, index):
 		self.command('AT+CMGD=%d' % index)
 
-	def battery_volts(self):
+	def battery(self):
+		"""Returns (volts, charge state) from AT+CBC."""
 		# +CBC: <charge status>,<charge level>,<voltage in mV>
 		for line in self.command('AT+CBC'):
-			m = re.match(r'\s*\+CBC: \d+,\d+,(\d+)\s*$', line)
+			m = re.match(r'\s*\+CBC: (\d+),\d+,(\d+)\s*$', line)
 			if m:
-				return int(m.group(1)) / 1000
+				return int(m.group(2)) / 1000, CHARGE_STATES.get(m.group(1), 'state ' + m.group(1))
 		raise ModemError('AT+CBC -> no voltage')
 
 	def purge_sms(self):
@@ -273,7 +306,7 @@ class Modem:
 			if time.time() - last_battery > BATTERY_PERIOD:
 				last_battery = time.time()
 				try:
-					log('battery: %.2f V' % self.battery_volts())
+					log('battery: %.2f V, %s' % self.battery())
 				except ModemError as e:
 					log('error: %s' % e)
 			if self.new_sms or time.time() - last_scan > SCAN_PERIOD:

@@ -21,7 +21,7 @@ def time_text():
 
 def main():
 	parser = argparse.ArgumentParser(description='Answers "heure" SMS with the current time.')
-	parser.add_argument('port', help='serial port of the module, e.g. COM18 or /dev/ttyUSB0')
+	parser.add_argument('port', help='serial port of the FTDI adapter (/dev/cuaU1, /dev/ttyUSB0, COM18), or auto to find it')
 	parser.add_argument('--trace', action='store_true', help='log every byte exchanged with the module')
 	args = parser.parse_args()
 
@@ -34,7 +34,7 @@ def main():
 		modem.send_sms(sender, reply)
 		log('replied to %s: %s' % (sender, reply))
 
-	log('ready on %s, waiting for SMS' % args.port)
+	log('ready on %s, waiting for SMS' % modem.port)
 	modem.serve(on_sms)
 
 
