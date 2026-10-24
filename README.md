@@ -19,7 +19,9 @@ Still to check: is there a QuecPython firmware for the EG800Q-EU? The standard f
 | File | Runs on | Purpose |
 |---|---|---|
 | `tools/at_check.py` | PC (Windows or FreeBSD) | Sends AT commands over the USB AT port and prints identity, firmware, SIM, signal, registration and bands |
-| `tools/sms_time_server.py` | PC (Windows or FreeBSD) | SMS time server: answers `heure` or `time` with the current time |
+| `tools/eg800q.py` | — | Shared code: AT commands over the UART, GSM 7-bit text, loop that picks up incoming SMS |
+| `tools/sms_time_server.py` | PC (Windows, Linux or FreeBSD) | SMS time server: answers `heure` or `time` with the current time |
+| `tools/sms_claude.py` | Linux | Answers every incoming SMS question with Claude Code, in a single SMS |
 | `usr/check_eg800q.py` | Module (QuecPython REPL) | Prints model, firmware and IMEI, and lists the QuecPython modules the firmware provides |
 
 ## Usage
@@ -31,7 +33,7 @@ pip install pyserial
 python tools/at_check.py COM5
 ```
 
-On FreeBSD the port is usually `/dev/cuaU0` (or `cuaU0.x`).
+On FreeBSD the port is usually `/dev/cuaU0` (or `cuaU0.x`). On Linux, a USB-serial adapter is usually `/dev/ttyUSB0`.
 
 ## SMS time server
 
@@ -44,6 +46,29 @@ python tools/sms_time_server.py COM18
 - Only plain phone numbers get an answer, never operator short codes. Other messages are logged and left alone.
 - The server lists the SMS every 5 seconds and answers the unread ones. It does not rely on `+CMTI` alone, because the module sends it to the USB AT port by default (`AT+QCFG="urc/port"` is `usbat`), not to the UART. Messages received while the server was stopped are answered too.
 - The module stores SMS in its own memory (`ME`), which holds only **10 messages**. `--delete` removes each answered request. Without it, the memory fills up and new SMS stop arriving.
+
+## SMS questions answered by Claude
+
+`tools/sms_claude.py` treats every incoming SMS as a question, asks Claude Code (`claude -p`) and sends the answer back in a single SMS of at most 160 characters.
+
+Setup on Linux (Debian, Ubuntu, OpenMediaVault: system Python refuses `pip install`, use the distribution package):
+
+```
+sudo apt install python3-serial
+curl -fsSL https://claude.ai/install.sh | bash
+claude setup-token
+export CLAUDE_CODE_OAUTH_TOKEN=<token printed by setup-token>
+python3 tools/sms_claude.py /dev/ttyUSB0 --delete --allow +33612345678
+```
+
+- `claude setup-token` creates a long-lived token from a Claude subscription. `ANTHROPIC_API_KEY` works too.
+- The user running the script must be allowed to open the serial port (group `dialout` on Debian/Ubuntu).
+- Claude runs with **no tools** (`--tools ""`, no MCP), in an empty temporary directory, and the question goes through stdin. Someone who knows the number can only get a text answer, never run anything on the machine.
+- `--allow` (repeatable) restricts answers to some numbers. Without it, every phone number gets an answer, and every SMS uses your Claude quota.
+- `--model` is passed to `claude --model` (`sonnet`, `haiku`…). Default: the CLI's default model.
+- The answer is converted to the GSM SMS alphabet: French accents such as é, è, à and ù are kept, `ç` becomes `c`, `€` becomes `EUR`, and other characters become `?`. Answers longer than 160 characters are cut and end with `...`.
+- If Claude fails or takes longer than 2 minutes, the sender gets `Desole, je ne peux pas repondre pour le moment.`
+- A question longer than 160 characters arrives as several SMS, and each part is answered separately.
 
 ## Tested module
 
