@@ -53,7 +53,13 @@ Both servers (this one and `sms_claude.py`) work the same way, in `tools/eg800q.
 
 ## SMS questions answered by Claude
 
-`tools/sms_claude.py` treats every incoming SMS as a question, asks Claude Code (`claude -p`) and sends the answer back in a single SMS of at most 160 characters.
+`tools/sms_claude.py` answers every incoming SMS with Claude Code (`claude -p`), **always in French**, in a single SMS of at most 160 characters.
+
+Conversations and politeness:
+
+- A **conversation** is all the SMS from one number. It ends after 30 minutes without SMS from that number (`--conversation-timeout MINUTES`), and after a restart of the script.
+- The first SMS of a conversation must **start with "Bonjour" or "Bonsoir"** (any case, accents ignored). Otherwise the sender gets `La politesse avant tout : commencez par « Bonjour » et je répondrai avec plaisir à votre message.`, without calling Claude, and the conversation does not start.
+- Within a conversation, Claude gets the last 10 exchanges with that number, so a follow-up question keeps its context.
 
 Setup on Linux (Debian, Ubuntu, OpenMediaVault: system Python refuses `pip install`, use the distribution package):
 
@@ -71,7 +77,7 @@ python3 tools/sms_claude.py /dev/ttyUSB0 --allow +33612345678
 - `--allow` (repeatable) restricts answers to some numbers. Without it, every phone number gets an answer, and every SMS uses your Claude quota.
 - `--model` is passed to `claude --model` (`sonnet`, `haiku`…). Default: the CLI's default model.
 - The answer is converted to the GSM SMS alphabet: French accents such as é, è, à and ù are kept, `ç` becomes `c`, `€` becomes `EUR`, and other characters become `?`. Answers longer than 160 characters are cut and end with `...`.
-- If Claude fails or takes longer than 2 minutes, the sender gets `Desole, je ne peux pas repondre pour le moment.`
+- If Claude fails or takes longer than 2 minutes, the sender gets `Désolé, je ne peux pas répondre pour le moment.`
 - A question with a character missing from the GSM alphabet (`ç`, `’`, an emoji…) is sent by the phone in UCS2, and the module prints it as hex (`0045006E…`). The script decodes it back to text, emoji included (😀, ❤️, ✅, flags, skin tones, 👨‍👩‍👧). Two limits: a single emoji alone without variation selector (`2764`, ❤) cannot be told from a number and stays as hex, and replies cannot contain emoji, since they are sent in the GSM alphabet.
 - A question longer than 160 characters arrives as several SMS, and each part is answered separately.
 
