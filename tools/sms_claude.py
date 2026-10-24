@@ -13,7 +13,7 @@
 # After that, every SMS is deleted once handled, answered or not.
 #
 # Usage: python3 sms_claude.py PORT [--allow +336...] [--model NAME]
-#                              [--conversation-timeout MINUTES]
+#                              [--conversation-timeout MINUTES] [--group-wait SECONDS]
 #                              [--claude PATH] [--humour] [--sms-log FILE] [--trace]
 #   PORT: usb (module's USB port), auto (FTDI adapter), /dev/cuaU0, /dev/ttyUSB0
 # Auth: export CLAUDE_CODE_OAUTH_TOKEN=... (from "claude setup-token")
@@ -175,6 +175,8 @@ def main():
 	parser.add_argument('--model', help='Claude model alias or name passed to claude --model')
 	parser.add_argument('--conversation-timeout', type=float, default=30, metavar='MINUTES',
 		help='a conversation ends after this many minutes without SMS from its number (default: 30)')
+	parser.add_argument('--group-wait', type=float, default=5, metavar='SECONDS',
+		help='SMS from one number arriving less than this apart are answered together (default: 5, 0 to answer each one)')
 	parser.add_argument('--trace', action='store_true', help='log every byte exchanged with the module')
 	parser.add_argument('--humour', action='store_true',
 		help='ask Claude for a touch of humour in its answers')
@@ -192,7 +194,7 @@ def main():
 	responder = Responder(modem.send_sms, args.allow, args.conversation_timeout,
 		lambda text, history: ask_claude(text, history, args.model, args.claude, args.humour))
 	log('ready on %s, waiting for SMS' % modem.port)
-	modem.serve(responder.on_sms)
+	modem.serve(responder.on_sms, args.group_wait)
 
 
 if __name__ == '__main__':

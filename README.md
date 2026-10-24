@@ -13,8 +13,9 @@ phone ◀──SMS── EG800Q-EU ◀──USB── FreeBSD: answer in 1 or 2 
 
 1. `sms_claude.py` drives the module with AT commands over its USB port.
 2. It lists the SMS stored in the module every 5 seconds, and 1 second after the module announces a new one (`+CMTI`).
-3. For each SMS: if it opens a conversation without "Bonjour", it sends back a politeness reminder; otherwise it asks Claude and sends the answer.
-4. Then it deletes the SMS from the module, whose memory only holds 10 messages.
+3. It waits until the sender has been silent for 5 seconds: SMS sent in a row are joined and answered once.
+4. If the message opens a conversation without "Bonjour", it sends back a politeness reminder; otherwise it asks Claude and sends the answer.
+5. Then it deletes the SMS from the module, whose memory only holds 10 messages.
 
 ## Hardware
 
@@ -164,6 +165,7 @@ The service runs `daemon(8)`, which restarts the script 5 s after any exit (modu
 | `--humour` | Asks Claude for a touch of humour (a quip, a small joke), never at the cost of accuracy or length |
 | `--allow NUMBER` | Only answer this number (repeatable). Default: every phone number |
 | `--conversation-timeout MINUTES` | Silence that ends a conversation (default 30) |
+| `--group-wait SECONDS` | SMS from one number less than this apart are joined and answered once (default 5, `0` to answer each SMS on its own) |
 | `--sms-log FILE` | Append one line per SMS received or sent |
 | `--trace` | Log every byte exchanged with the module |
 
@@ -191,7 +193,7 @@ Anyone who knows the number can send a prompt, so Claude is locked down:
 - An answer that fits in 160 characters goes out as one SMS. A longer one is split between two words into two SMS that start with `1/2` and `2/2`; beyond two SMS the second one is cut and ends with `...`. The politeness reminder and the error reply are always a single SMS.
 - SMS are sent in the GSM 7-bit alphabet: é, è, à, ù and Ç are kept, `ç` becomes `c`, `€` becomes `EUR`, `°` is dropped, other characters become `?`.
 - An SMS holding a character outside that alphabet (`ç`, `’`, an emoji) is sent by the phone in UCS2, which the module shows as hex. The script decodes it, emoji included. A single emoji alone without variation selector (`2764`) cannot be told from a number and stays as hex.
-- A question longer than 160 characters arrives as several SMS, answered one by one.
+- SMS from one number are gathered until it has been silent for 5 s (`--group-wait`), then their texts are joined and answered once. A question split by the phone into several SMS, or a message sent in two goes ("Bonjour" then "quelle heure ?"), gets a single answer.
 
 ### Module memory and errors
 
