@@ -15,6 +15,7 @@ MAX_TRIES = 3  # attempts to send a reply before the SMS is deleted anyway
 COMMAND_TIMEOUT = 20  # seconds; the module can take more than 5 s right after sending an SMS
 SEND_TIMEOUT = 120  # seconds; Quectel gives 120 s as the maximum response time of AT+CMGS
 DONE_GRACE = 5  # seconds to wait for OK once a reply already proves success
+BATTERY_PERIOD = 60  # seconds between two battery voltage readings in the log
 
 # GSM 03.38 basic character set: the module sends and expects these codes
 # in text mode with AT+CSCS="GSM" (for example 0x04 is "è").
@@ -232,6 +233,14 @@ class Modem:
 	def delete_sms(self, index):
 		self.command('AT+CMGD=%d' % index)
 
+	def battery_volts(self):
+		# +CBC: <charge status>,<charge level>,<voltage in mV>
+		for line in self.command('AT+CBC'):
+			m = re.match(r'\s*\+CBC: \d+,\d+,(\d+)\s*$', line)
+			if m:
+				return int(m.group(1)) / 1000
+		raise ModemError('AT+CBC -> no voltage')
+
 	def purge_sms(self):
 		"""Logs then deletes every SMS stored in the module."""
 		try:
@@ -254,11 +263,19 @@ class Modem:
 		whose deletion failed is only deleted again, never handled twice.
 
 		+CMTI only reaches the port set by AT+QCFG="urc/port" (USB by default),
-		so the memory is also listed every few seconds."""
+		so the memory is also listed every few seconds. The battery voltage is
+		logged every BATTERY_PERIOD seconds."""
 		tries = {}
 		handled = set()  # (index, sender, stamp) handled but maybe not deleted
 		last_scan = 0
+		last_battery = 0
 		while True:
+			if time.time() - last_battery > BATTERY_PERIOD:
+				last_battery = time.time()
+				try:
+					log('battery: %.2f V' % self.battery_volts())
+				except ModemError as e:
+					log('error: %s' % e)
 			if self.new_sms or time.time() - last_scan > SCAN_PERIOD:
 				self.new_sms = False
 				last_scan = time.time()
