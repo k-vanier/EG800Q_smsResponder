@@ -22,9 +22,10 @@ def time_text():
 def main():
 	parser = argparse.ArgumentParser(description='Answers "heure" SMS with the current time.')
 	parser.add_argument('port', help='serial port of the module, e.g. COM18 or /dev/ttyUSB0')
+	parser.add_argument('--trace', action='store_true', help='log every byte exchanged with the module')
 	args = parser.parse_args()
 
-	modem = Modem(args.port)
+	modem = Modem(args.port, args.trace)
 
 	def on_sms(sender, text):
 		if text.lower() not in KEYWORDS or not is_phone_number(sender):

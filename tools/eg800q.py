@@ -111,17 +111,32 @@ def is_phone_number(sender):
 
 
 class Modem:
-	def __init__(self, port):
+	def __init__(self, port, trace=False):
 		self.ser = serial.Serial(port, 115200, timeout=0.5)
+		self.trace = trace  # log every byte written to and read from the module
 		self.new_sms = False  # set by +CMTI to scan without waiting
 		for cmd in ('AT', 'ATE0', 'AT+CMEE=2', 'AT+CMGF=1', 'AT+CSCS="GSM"', 'AT+CNMI=2,1,0,0,0'):
 			self.command(cmd)
+
+	def _write(self, data):
+		if self.trace:
+			log('>> %r' % data)
+		self.ser.write(data)
+
+	def _read(self):
+		data = self.ser.read(1)
+		if self.trace and data:
+			log('<< %r' % data)
+		return data
 
 	def _readline(self):
 		# latin-1 keeps the GSM codes of SMS text as they are. Only the line end
 		# is removed: strip() would also drop GSM letters whose codes Python sees
 		# as whitespace, such as 0x09 "Ç" or 0x1F "É".
-		return self.ser.readline().decode('latin-1').rstrip('\r\n')
+		data = self.ser.readline()
+		if self.trace and data:
+			log('<< %r' % data)
+		return data.decode('latin-1').rstrip('\r\n')
 
 	def _urc(self, line):
 		# +CMTI: "ME",3 -> new SMS stored at index 3
@@ -135,12 +150,15 @@ class Modem:
 		end = time.time() + timeout
 		while time.time() < end:
 			line = self._readline()
-			if not line or line == cmd or self._urc(line):
+			# The module's own replies are compared fully stripped (a stray "\r"
+			# or space must not hide an OK); SMS text lines are kept as they are.
+			status = line.strip()
+			if not line or status == cmd or self._urc(status):
 				continue
-			if line == 'OK':
+			if status == 'OK':
 				return lines
-			if 'ERROR' in line:
-				raise ModemError('%s -> %s' % (cmd, line))
+			if 'ERROR' in status:
+				raise ModemError('%s -> %s' % (cmd, status))
 			lines.append(line)
 		raise ModemError('%s -> timeout' % cmd)
 
@@ -150,25 +168,25 @@ class Modem:
 		# the reply to the next command.
 		while self.ser.in_waiting:
 			line = self._readline()
-			if line and not self._urc(line):
+			if line.strip() and not self._urc(line.strip()):
 				log('late reply dropped: %r' % line)
 
 	def command(self, cmd, timeout=COMMAND_TIMEOUT):
 		self._flush()
-		self.ser.write((cmd + '\r').encode())
+		self._write((cmd + '\r').encode())
 		return self._wait_result(cmd, timeout)
 
 	def send_sms(self, number, text):
 		cmd = 'AT+CMGS="%s"' % number
 		self._flush()
-		self.ser.write((cmd + '\r').encode())
+		self._write((cmd + '\r').encode())
 		buf = b''
 		end = time.time() + 5
 		while b'>' not in buf:
 			if time.time() > end:
 				raise ModemError('%s -> no prompt' % cmd)
-			buf += self.ser.read(1)
-		self.ser.write(gsm_encode(text) + b'\x1a')
+			buf += self._read()
+		self._write(gsm_encode(text) + b'\x1a')
 		return self._wait_result(cmd, SEND_TIMEOUT)
 
 	def list_sms(self):
@@ -180,7 +198,7 @@ class Modem:
 		messages = []
 		for line in self.command('AT+CMGL="ALL"', 30):
 			# +CMGL: 3,"REC UNREAD","+33612345678",,"26/10/24,14:32:10+08"
-			m = re.match(r'\+CMGL: (\d+),"[^"]*","([^"]*)"', line)
+			m = re.match(r'\s*\+CMGL: (\d+),"[^"]*","([^"]*)"', line)
 			if m:
 				messages.append([int(m.group(1)), m.group(2), ''])
 			elif messages:
@@ -234,6 +252,6 @@ class Modem:
 						self.delete_sms(index)
 					except ModemError as e:
 						log('error: %s' % e)
-			line = self._readline()
+			line = self._readline().strip()
 			if line:
 				self._urc(line)

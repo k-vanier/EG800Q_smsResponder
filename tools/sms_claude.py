@@ -138,12 +138,13 @@ def main():
 	parser.add_argument('--model', help='Claude model alias or name passed to claude --model')
 	parser.add_argument('--conversation-timeout', type=float, default=30, metavar='MINUTES',
 		help='a conversation ends after this many minutes without SMS from its number (default: 30)')
+	parser.add_argument('--trace', action='store_true', help='log every byte exchanged with the module')
 	args = parser.parse_args()
 
 	if not os.environ.get('CLAUDE_CODE_OAUTH_TOKEN') and not os.environ.get('ANTHROPIC_API_KEY'):
 		log('warning: neither CLAUDE_CODE_OAUTH_TOKEN nor ANTHROPIC_API_KEY is set')
 
-	modem = Modem(args.port)
+	modem = Modem(args.port, args.trace)
 	log('purged %d SMS already in memory' % modem.purge_sms())
 	responder = Responder(modem.send_sms, args.allow, args.model, args.conversation_timeout)
 	log('ready on %s, waiting for SMS' % args.port)
