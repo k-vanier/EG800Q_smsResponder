@@ -13,6 +13,7 @@ SCAN_PERIOD = 5  # seconds between two checks for unread SMS
 SMS_LENGTH = 160  # GSM 7-bit characters in a single SMS
 MAX_TRIES = 3  # attempts to send a reply before the SMS is deleted anyway
 COMMAND_TIMEOUT = 20  # seconds; the module can take more than 5 s right after sending an SMS
+SEND_TIMEOUT = 120  # seconds; Quectel gives 120 s as the maximum response time of AT+CMGS
 
 # GSM 03.38 basic character set: the module sends and expects these codes
 # in text mode with AT+CSCS="GSM" (for example 0x04 is "è").
@@ -142,7 +143,7 @@ class Modem:
 				raise ModemError('%s -> no prompt' % cmd)
 			buf += self.ser.read(1)
 		self.ser.write(gsm_encode(text) + b'\x1a')
-		return self._wait_result(cmd, 60)
+		return self._wait_result(cmd, SEND_TIMEOUT)
 
 	def list_sms(self):
 		"""Returns [(index, sender, text)] for every SMS stored in the module.

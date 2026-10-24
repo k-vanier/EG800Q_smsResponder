@@ -77,8 +77,9 @@ def main():
 		except (RuntimeError, subprocess.TimeoutExpired, OSError) as e:
 			log('claude error: %s' % e)
 			reply = ERROR_REPLY
+		log('sending to %s: %s' % (sender, reply))
 		modem.send_sms(sender, reply)
-		log('replied to %s: %s' % (sender, reply))
+		log('sent to %s' % sender)
 
 	log('ready on %s, waiting for SMS' % args.port)
 	modem.serve(on_sms)
