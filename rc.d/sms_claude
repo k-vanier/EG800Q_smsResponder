@@ -45,5 +45,13 @@ pidfile="/var/run/${name}.pid"
 command="/usr/sbin/daemon"
 command_args="-P ${pidfile} -r -R 5 -S -T ${name} -u ${sms_claude_user} ${sms_claude_python} ${sms_claude_dir}/sms_claude.py ${sms_claude_port} ${sms_claude_args}"
 required_files="${sms_claude_dir}/sms_claude.py ${sms_claude_dir}/eg800q.py"
+start_precmd="${name}_prestart"
+
+# daemon -u drops privileges before it writes its pidfile: create it for the
+# user, since only root can write in /var/run.
+sms_claude_prestart()
+{
+	install -o "${sms_claude_user}" -m 644 /dev/null "${pidfile}"
+}
 
 run_rc_command "$1"
