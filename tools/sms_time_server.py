@@ -21,7 +21,7 @@ def time_text():
 
 def main():
 	parser = argparse.ArgumentParser(description='Answers "heure" SMS with the current time.')
-	parser.add_argument('port', help='serial port of the FTDI adapter (/dev/cuaU1, /dev/ttyUSB0, COM18), or auto to find it')
+	parser.add_argument('port', help='usb for the module's own USB port, or the serial port of the FTDI adapter (/dev/cuaU1, /dev/ttyUSB0, COM18), or auto to find it')
 	parser.add_argument('--trace', action='store_true', help='log every byte exchanged with the module')
 	args = parser.parse_args()
 

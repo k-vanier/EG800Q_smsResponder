@@ -19,10 +19,11 @@ Still to check: is there a QuecPython firmware for the EG800Q-EU? The standard f
 | File | Runs on | Purpose |
 |---|---|---|
 | `tools/at_check.py` | PC (Windows or FreeBSD) | Sends AT commands over the USB AT port and prints identity, firmware, SIM, signal, registration and bands |
-| `tools/eg800q.py` | — | Shared code: AT commands over the UART, GSM 7-bit text, loop that picks up incoming SMS |
+| `tools/eg800q.py` | — | Shared code: AT commands over the UART or the module's USB port, GSM 7-bit text, loop that picks up incoming SMS |
 | `tools/sms_time_server.py` | PC (Windows, Linux or FreeBSD) | SMS time server: answers `heure` or `time` with the current time |
 | `tools/sms_claude.py` | FreeBSD or Linux | Answers every incoming SMS with Claude Code (web search only), in French, in a single SMS |
 | `rc.d/sms_claude` | FreeBSD | rc.d script that runs `sms_claude.py` at boot under `daemon(8)` |
+| `devd/eg800q.conf` | FreeBSD | devd rule that gives the module's USB port to the `dialer` group |
 | `usr/check_eg800q.py` | Module (QuecPython REPL) | Prints model, firmware and IMEI, and lists the QuecPython modules the firmware provides |
 
 ## Usage
@@ -53,7 +54,9 @@ Both servers (this one and `sms_claude.py`) work the same way, in `tools/eg800q.
 - Right after the module transmits an SMS, bytes it sends on the UART sometimes arrive garbled (`+CMGS: 32` then `
 þ` instead of `OK`). The likely cause is the current peak of the radio on a weak power supply, or a UART voltage mismatch with the USB-serial adapter. Reading SMS can be hit too (`+33ÿÿÿÿÿ`). The server copes with it: a listing with a byte above 0x7F (impossible in GSM text mode) or a malformed `+CMGL` header is ignored and read again 5 s later, nothing is answered or deleted; `+CMGS: n` alone counts as sent (it waits 5 s for the OK, not 120 s), and an SMS already answered whose deletion failed is only deleted again, never answered twice.
 - Every minute the log shows the battery voltage and charge state from `AT+CBC`, for example `battery: 3.91 V, charging` (or `charged`, `not charging`). Below about 3.5 V the module gets unreliable when it transmits.
-- The module's USB port is only used to charge the battery: all data goes through the UART and the FTDI adapter. Give `auto` as port to find the adapter by its driver (`dev.uftdi.N.ttyname` on FreeBSD, USB vendor `0403` elsewhere): its number can change when another USB serial device, or the module's USB port, is plugged in.
+- Two ways to reach the module, chosen by the port argument:
+  - **`usb`** (recommended): the module's own USB port, which also charges the battery. One cable, no voltage or noise problem. FreeBSD has no driver for its serial interfaces (`2c7c:6007`), so the script talks to them with pyusb: interfaces 2 and 3 answer AT commands, `usb` uses 2, the AT port where the module also sends `+CMTI` (`usb:3` picks the other one).
+  - **The UART through the FTDI adapter**: `/dev/cuaU0`, or `auto` to find the adapter by its driver (`dev.uftdi.N.ttyname` on FreeBSD, USB vendor `0403` elsewhere). The module's UART is probably 1.8 V: with a 3.3 V FTDI, bytes arrive garbled, and with the USB-C plugged in at the same time nothing readable gets through.
 - `--trace` logs every byte written to and read from the module, to see what it really answers.
 - The server does not rely on `+CMTI` alone, because the module sends it to the USB AT port by default (`AT+QCFG="urc/port"` is `usbat`), not to the UART.
 
@@ -87,18 +90,27 @@ SMS text:
 
 **Serial port.** A USB-serial adapter shows up as `/dev/cuaU0`, `/dev/cuaU1`… (use `cuaU`, not `ttyU`, which waits for the carrier signal); `auto` finds the FTDI one. It belongs to `uucp:dialer`, so the user that runs the script must be in the `dialer` group.
 
-**Python.** Only pyserial is needed besides Python (`py311-` follows the default Python version, check with `pkg search pyserial`):
+**Python.** pyserial, and pyusb for the `usb` port (`py312-` follows the default Python version, check with `pkg search pyserial`):
 
 ```
-pkg install python3 py311-pyserial
+pkg install python3 py312-pyserial py312-pyusb
 ```
+
+**USB permissions.** A raw USB device belongs to root. `devd/eg800q.conf` gives the module to the `dialer` group each time it is plugged in (it matches `2c7c:6007` only):
+
+```
+install -m 444 devd/eg800q.conf /usr/local/etc/devd/
+service devd restart
+```
+
+Then unplug and plug the module back, and check that `ls -l /dev/ugen*` shows its device with group `dialer`.
 
 **Claude Code.** `claude` must already work for the user that runs the script: check with `echo "Bonjour" | claude -p --tools "" --output-format text`, and note its path with `which claude`.
 
 **Try it by hand** (the user must be in the `dialer` group: `pw groupmod dialer -m $USER`, then log in again):
 
 ```
-python3 tools/sms_claude.py auto --claude /usr/local/bin/claude
+python3 tools/sms_claude.py usb --claude /usr/local/bin/claude
 ```
 
 **Service at boot.** `rc.d/sms_claude` runs the script under `daemon(8)` as the user for whom `claude` works, with `HOME` set to that user's home so `claude` finds its login, restarts it 5 s after any exit, and sends its log to syslog (`/var/log/messages`, tag `sms_claude`). As root, from this folder:
@@ -114,7 +126,7 @@ service sms_claude start
 tail -f /var/log/messages | grep sms_claude
 ```
 
-Set `sms_claude_args` to the path `which claude` printed. Other settings (`sysrc`): `sms_claude_port` (default `auto`), `sms_claude_dir`, `sms_claude_python` (default `/usr/local/bin/python3`). If `claude` only works with a token exported in your shell, put `CLAUDE_CODE_OAUTH_TOKEN=...` in a root-only file (`install -m 600 /dev/null /usr/local/etc/sms_claude.env`, then write the line into it) and set `sysrc sms_claude_env_file=/usr/local/etc/sms_claude.env`.
+Set `sms_claude_args` to the path `which claude` printed. Other settings (`sysrc`): `sms_claude_port` (default `usb`; `auto` or `/dev/cuaU0` for the FTDI adapter), `sms_claude_dir`, `sms_claude_python` (default `/usr/local/bin/python3`). If `claude` only works with a token exported in your shell, put `CLAUDE_CODE_OAUTH_TOKEN=...` in a root-only file (`install -m 600 /dev/null /usr/local/etc/sms_claude.env`, then write the line into it) and set `sysrc sms_claude_env_file=/usr/local/etc/sms_claude.env`.
 
 ## Tested module
 

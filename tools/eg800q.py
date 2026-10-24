@@ -1,7 +1,9 @@
-# Shared code for the EG800Q-EU SMS scripts: AT command link over the UART,
-# GSM 7-bit text conversion and the loop that picks up incoming SMS.
-# Needs pyserial: pip install pyserial
+# Shared code for the EG800Q-EU SMS scripts: AT command link (UART through a
+# USB-serial adapter, or the module's own USB port), GSM 7-bit text conversion
+# and the loop that picks up incoming SMS.
+# Needs pyserial, and pyusb for the "usb" port.
 
+import ctypes.util
 import datetime
 import re
 import subprocess
@@ -19,10 +21,15 @@ COMMAND_TIMEOUT = 20  # seconds; the module can take more than 5 s right after s
 SEND_TIMEOUT = 120  # seconds; Quectel gives 120 s as the maximum response time of AT+CMGS
 DONE_GRACE = 5  # seconds to wait for OK once a reply already proves success
 BATTERY_PERIOD = 60  # seconds between two battery voltage readings in the log
-# First field of +CBC; the module's USB port only charges the battery, data
-# goes through the UART
+# First field of +CBC
 CHARGE_STATES = {'0': 'not charging', '1': 'charging', '2': 'charged'}
 FTDI_VID = 0x0403  # USB vendor of the FTDI adapter wired to the module's UART
+# The module's own USB port: interfaces 1 to 3 are serial ports, 2 and 3 answer
+# AT commands. 2 is the AT port, where URCs such as +CMTI go
+# (AT+QCFG="urc/port" is "usbat"). FreeBSD has no driver for them, so pyusb
+# talks to them directly.
+MODULE_USB_ID = (0x2C7C, 0x6007)
+USB_AT_INTERFACE = 2
 
 # GSM 03.38 basic character set: the module sends and expects these codes
 # in text mode with AT+CSCS="GSM" (for example 0x04 is "è").
@@ -114,6 +121,74 @@ def log(msg):
 	print(datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S'), msg, flush=True)
 
 
+class UsbPort:
+	"""The module's USB serial interface, with the part of the pyserial API
+	Modem uses (write, read, readline, in_waiting) and the same 0.5 s timeout."""
+
+	TIMEOUT = 0.5
+
+	def __init__(self, interface=USB_AT_INTERFACE):
+		import usb.backend.libusb1
+		import usb.core
+		import usb.util
+		self.usb = usb
+		# The library is libusb-1.0 on Linux and libusb in FreeBSD's base system
+		backend = usb.backend.libusb1.get_backend(
+			find_library=lambda name: ctypes.util.find_library('usb-1.0') or ctypes.util.find_library('usb'))
+		self.dev = usb.core.find(idVendor=MODULE_USB_ID[0], idProduct=MODULE_USB_ID[1], backend=backend)
+		if self.dev is None:
+			raise ModemError('module not found on USB (%04x:%04x)' % MODULE_USB_ID)
+		intf = self.dev.get_active_configuration()[(interface, 0)]
+		def bulk(direction):
+			return usb.util.find_descriptor(intf, custom_match=lambda e:
+				usb.util.endpoint_direction(e.bEndpointAddress) == direction
+				and usb.util.endpoint_type(e.bmAttributes) == usb.util.ENDPOINT_TYPE_BULK)
+		self.ep_out = bulk(usb.util.ENDPOINT_OUT)
+		self.ep_in = bulk(usb.util.ENDPOINT_IN)
+		try:
+			# Linux binds its option driver to the interface; FreeBSD binds none
+			if self.dev.is_kernel_driver_active(interface):
+				self.dev.detach_kernel_driver(interface)
+		except (NotImplementedError, usb.core.USBError):
+			pass
+		usb.util.claim_interface(self.dev, interface)
+		# SET_CONTROL_LINE_STATE with DTR and RTS on, as when a serial port opens
+		self.dev.ctrl_transfer(0x21, 0x22, 0x03, interface)
+		self.buf = b''
+
+	def _fill(self, seconds):
+		try:
+			self.buf += bytes(self.ep_in.read(512, timeout=max(1, int(seconds * 1000))))
+		except self.usb.core.USBTimeoutError:
+			pass
+
+	@property
+	def in_waiting(self):
+		if not self.buf:
+			self._fill(0.001)
+		return len(self.buf)
+
+	def write(self, data):
+		self.ep_out.write(data, timeout=5000)
+
+	def read(self, size=1):
+		if not self.buf:
+			self._fill(self.TIMEOUT)
+		data, self.buf = self.buf[:size], self.buf[size:]
+		return data
+
+	def readline(self):
+		end = time.time() + self.TIMEOUT
+		while b'\n' not in self.buf and time.time() < end:
+			self._fill(end - time.time())
+		if b'\n' in self.buf:
+			line, self.buf = self.buf.split(b'\n', 1)
+			return line + b'\n'
+		# Like pyserial on timeout: whatever arrived, maybe nothing
+		data, self.buf = self.buf, b''
+		return data
+
+
 def find_ftdi_port():
 	"""Returns the serial port of the FTDI adapter wired to the module's UART.
 
@@ -146,7 +221,13 @@ class Modem:
 			port = find_ftdi_port()
 			log('FTDI adapter found on %s' % port)
 		self.port = port
-		self.ser = serial.Serial(port, 115200, timeout=0.5)
+		if port == 'usb' or port.startswith('usb:'):
+			# usb, or usb:N for interface N of the module's USB port
+			interface = int(port[4:]) if port.startswith('usb:') else USB_AT_INTERFACE
+			self.ser = UsbPort(interface)
+			self.port = 'USB interface %d' % interface
+		else:
+			self.ser = serial.Serial(port, 115200, timeout=0.5)
 		self.trace = trace  # log every byte written to and read from the module
 		self.new_sms = False  # set by +CMTI to scan without waiting
 		for cmd in ('AT', 'ATE0', 'AT+CMEE=2', 'AT+CMGF=1', 'AT+CSCS="GSM"', 'AT+CNMI=2,1,0,0,0'):

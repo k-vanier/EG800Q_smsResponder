@@ -9,7 +9,8 @@
 #   sms_claude_enable="YES"
 #   sms_claude_user="bsdouille"      utilisateur pour qui claude fonctionne déjà,
 #                                    membre du groupe dialer
-#   sms_claude_port="auto"           port de l'adaptateur FTDI, trouvé tout seul par défaut
+#   sms_claude_port="usb"            port USB du module (pyusb, règle devd/eg800q.conf),
+#                                    ou "auto" pour l'adaptateur FTDI, ou /dev/cuaU0
 #   sms_claude_args="--claude /usr/local/bin/claude"
 #                                    options de sms_claude.py (chemin de claude, --allow...)
 #   sms_claude_dir="/usr/local/libexec/eg800q"     dossier de sms_claude.py et eg800q.py
@@ -30,7 +31,7 @@ load_rc_config $name
 
 : ${sms_claude_enable:="NO"}
 : ${sms_claude_user:="bsdouille"}
-: ${sms_claude_port:="auto"}
+: ${sms_claude_port:="usb"}
 : ${sms_claude_args:=""}
 : ${sms_claude_dir:="/usr/local/libexec/eg800q"}
 : ${sms_claude_python:="/usr/local/bin/python3"}

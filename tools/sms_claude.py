@@ -15,7 +15,7 @@
 # Usage: python3 sms_claude.py PORT [--allow +336...] [--model NAME]
 #                              [--conversation-timeout MINUTES]
 #                              [--claude PATH] [--trace]
-#   PORT: /dev/cuaU0 on FreeBSD, /dev/ttyUSB0 on Linux
+#   PORT: usb (module's USB port), auto (FTDI adapter), /dev/cuaU0, /dev/ttyUSB0
 # Auth: export CLAUDE_CODE_OAUTH_TOKEN=... (from "claude setup-token")
 #       or ANTHROPIC_API_KEY=...
 # Needs pyserial, and the claude CLI in PATH (or --claude).
@@ -147,7 +147,7 @@ class Responder:
 
 def main():
 	parser = argparse.ArgumentParser(description='Answers incoming SMS with Claude Code, in French.')
-	parser.add_argument('port', help='serial port of the FTDI adapter (/dev/cuaU1, /dev/ttyUSB0, COM18), or auto to find it')
+	parser.add_argument('port', help='usb for the module's own USB port, or the serial port of the FTDI adapter (/dev/cuaU1, /dev/ttyUSB0, COM18), or auto to find it')
 	parser.add_argument('--allow', action='append', metavar='NUMBER',
 		help='only answer this number (repeatable, e.g. +33612345678); default: any phone number')
 	parser.add_argument('--model', help='Claude model alias or name passed to claude --model')
