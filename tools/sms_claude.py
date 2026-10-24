@@ -3,7 +3,8 @@
 # Claude Code's answer, cut to fit in a single SMS (160 characters).
 # Runs on Linux next to the EG800Q-EU and calls the Claude Code CLI (claude -p).
 #
-# Every SMS is deleted from the module once handled, answered or not.
+# At startup, every SMS already stored in the module is deleted without answer.
+# After that, every SMS is deleted once handled, answered or not.
 #
 # Usage: python3 sms_claude.py /dev/ttyUSB0 [--allow +336...] [--model NAME]
 # Auth: export CLAUDE_CODE_OAUTH_TOKEN=... (from "claude setup-token")
@@ -63,6 +64,7 @@ def main():
 		log('warning: neither CLAUDE_CODE_OAUTH_TOKEN nor ANTHROPIC_API_KEY is set')
 
 	modem = Modem(args.port)
+	log('purged %d SMS already in memory' % modem.purge_sms())
 
 	def on_sms(sender, text):
 		if not is_phone_number(sender) or not text:

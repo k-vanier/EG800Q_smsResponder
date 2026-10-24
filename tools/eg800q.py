@@ -131,6 +131,15 @@ class Modem:
 	def delete_sms(self, index):
 		self.command('AT+CMGD=%d' % index)
 
+	def purge_sms(self):
+		"""Logs then deletes every SMS stored in the module."""
+		messages = self.list_sms()
+		for index, sender, text in messages:
+			log('purged SMS %d from %s: %r' % (index, sender, text))
+		# Delete flag 4: all messages, whatever their status; the index is ignored
+		self.command('AT+CMGD=0,4', 25)
+		return len(messages)
+
 	def serve(self, on_sms):
 		"""For each SMS stored in the module, forever: calls on_sms(sender, text),
 		then deletes the SMS, so the 10-message memory never fills up.
