@@ -115,7 +115,7 @@ echo 'CLAUDE_CODE_OAUTH_TOKEN=sk-ant-oat...' > /usr/local/etc/sms_claude.env
 mkdir -p /usr/local/etc/newsyslog.conf.d
 install -m 444 newsyslog/sms.conf /usr/local/etc/newsyslog.conf.d/
 sysrc sms_claude_enable=YES sms_claude_user=youruser sms_claude_port=usb
-sysrc sms_claude_args="--claude /usr/local/bin/claude"
+sysrc sms_claude_args="--claude /usr/local/bin/claude"     # add --humour for a funnier bot
 sysrc sms_claude_env_file=/usr/local/etc/sms_claude.env
 service sms_claude start
 ```
@@ -161,6 +161,7 @@ The service runs `daemon(8)`, which restarts the script 5 s after any exit (modu
 | `PORT` | Same values as `sms_claude_port` |
 | `--claude PATH` | `claude` executable (default: `claude` from `PATH`; a service has a short `PATH`) |
 | `--model NAME` | Passed to `claude --model` |
+| `--humour` | Asks Claude for a touch of humour (a quip, a small joke), never at the cost of accuracy or length |
 | `--allow NUMBER` | Only answer this number (repeatable). Default: every phone number |
 | `--conversation-timeout MINUTES` | Silence that ends a conversation (default 30) |
 | `--sms-log FILE` | Append one line per SMS received or sent |
@@ -172,9 +173,9 @@ The service runs `daemon(8)`, which restarts the script 5 s after any exit (modu
 
 - A conversation is all the SMS from one number. It ends after 30 minutes without SMS from it, or when the script restarts.
 - Its first SMS must start with "Bonjour" or "Bonsoir" (any case, accents ignored). Otherwise the sender gets `La politesse avant tout : commencez par « Bonjour » et je répondrai avec plaisir à votre message.`, Claude is not called, and the conversation does not start.
-- The bot is called Robert3000. Its answer to that first SMS starts with `yo je suis Robert3000 le bot stylé qui repond à toutes tes interogration`, then answers the question if the greeting holds one. The name and the sentence are `BOT_NAME` and `INTRO_TEXT` at the top of `tools/sms_claude.py`.
+- The bot is called Robert3000. The script itself answers that first SMS with `yo je suis Robert3000 le bot stylé qui repond à toutes tes interogration`, word for word: alone for a bare greeting ("Bonjour !", Claude is not called), followed by Claude's answer if the greeting asks something ("Bonjour, quelle heure est-il ?"). The name and the sentence are `BOT_NAME` and `INTRO_TEXT` at the top of `tools/sms_claude.py`.
 - Within a conversation, Claude gets the last 10 exchanges with that number, so follow-up questions keep their context.
-- Claude always answers in French, in plain text, without links. It aims at 150 characters (one SMS) and is told never to go beyond 300 (two SMS).
+- Claude answers directly, without greeting, introducing itself or asking how it can help, always in French, in plain text, without links. It aims at 150 characters (one SMS) and is told never to go beyond 300 (two SMS).
 
 ### Claude and security
 

@@ -14,7 +14,7 @@
 #
 # Usage: python3 sms_claude.py PORT [--allow +336...] [--model NAME]
 #                              [--conversation-timeout MINUTES]
-#                              [--claude PATH] [--sms-log FILE] [--trace]
+#                              [--claude PATH] [--humour] [--sms-log FILE] [--trace]
 #   PORT: usb (module's USB port), auto (FTDI adapter), /dev/cuaU0, /dev/ttyUSB0
 # Auth: export CLAUDE_CODE_OAUTH_TOKEN=... (from "claude setup-token")
 #       or ANTHROPIC_API_KEY=...
@@ -43,10 +43,12 @@ MONTHS = ('janvier', 'février', 'mars', 'avril', 'mai', 'juin', 'juillet', 'ao�
 	'septembre', 'octobre', 'novembre', 'décembre')
 
 BOT_NAME = 'Robert3000'
-# How the bot introduces itself in the first answer of a conversation
+# First answer of a conversation, sent by the script itself word for word:
+# alone for a bare greeting, before Claude's answer if the greeting asks something
 INTRO_TEXT = 'yo je suis Robert3000 le bot stylé qui repond à toutes tes interogration'
 
 SYSTEM_PROMPT = """Tu t'appelles """ + BOT_NAME + """. Tu réponds à des SMS. Ta réponse est renvoyée telle quelle par SMS.
+- Ne salue pas, ne te présente pas, ne demande pas ce que tu peux faire : réponds directement.
 - Réponds toujours en français, quelle que soit la langue du message.
 - Elle doit tenir dans un SMS : 150 caractères. Si la question l'exige vraiment, deux SMS
   au plus : 300 caractères au maximum, jamais plus. Texte brut : pas de markdown, pas de
@@ -55,16 +57,24 @@ SYSTEM_PROMPT = """Tu t'appelles """ + BOT_NAME + """. Tu réponds à des SMS. T
   des horaires ou d'autres faits récents. Tu ne peux rien faire d'autre. Si tu ne sais pas, dis-le brièvement.
 - Si la conversation a déjà commencé, ses échanges précédents sont donnés avant le nouveau message.
 Date et heure actuelles : {now}."""
-# Added to SYSTEM_PROMPT for the first message of a conversation (the greeting)
-INTRO_PROMPT = """
-Ce message ouvre la conversation : commence ta réponse exactement par cette phrase, mot pour
-mot, sans la modifier ni la corriger : """ + INTRO_TEXT + """
-S'il contient une question, réponds-y ensuite, toujours dans la même limite de longueur."""
+# Added to SYSTEM_PROMPT with --humour
+HUMOUR_PROMPT = """
+- Mets un peu d'humour dans tes réponses : un trait d'esprit, une petite blague ou une
+  tournure décalée, sans jamais rendre l'information fausse ni dépasser la longueur permise."""
+
+
+def greeting(text):
+	"""None if text does not start with a greeting, else whether anything
+	follows it ("Bonjour !" -> False, "Bonjour, quelle heure ?" -> True)."""
+	plain = unicodedata.normalize('NFKD', text).encode('ascii', 'ignore').decode().lower()
+	m = re.match(r'\W*(%s)\b' % '|'.join(GREETINGS), plain)
+	if not m:
+		return None
+	return re.search(r'\w', plain[m.end():]) is not None
 
 
 def is_greeting(text):
-	plain = unicodedata.normalize('NFKD', text).encode('ascii', 'ignore').decode().lower()
-	return re.match(r'\W*(%s)\b' % '|'.join(GREETINGS), plain) is not None
+	return greeting(text) is not None
 
 
 def build_prompt(text, history):
@@ -77,11 +87,11 @@ def build_prompt(text, history):
 	return '\n'.join(lines)
 
 
-def ask_claude(text, history, model, claude='claude'):
+def ask_claude(text, history, model, claude='claude', humour=False):
 	now = datetime.datetime.now()
 	now = '%s %d %s %d, %s' % (DAYS[now.weekday()], now.day, MONTHS[now.month - 1], now.year, now.strftime('%H:%M'))
 	cmd = [claude, '-p',
-		'--system-prompt', SYSTEM_PROMPT.format(now=now) + ('' if history else INTRO_PROMPT),
+		'--system-prompt', SYSTEM_PROMPT.format(now=now) + (HUMOUR_PROMPT if humour else ''),
 		# Anyone who knows the number can send a prompt, so the only tool is
 		# WebSearch: it runs on Anthropic's side. No WebFetch, which would load
 		# pages from this machine and could reach the local network.
@@ -131,16 +141,21 @@ class Responder:
 			log('conversation with %s ended after %g min of silence' % (sender, self.timeout))
 			del self.conversations[sender]
 			conversation = None
-		if conversation is None and not is_greeting(text):
+		asks = greeting(text) if conversation is None else True
+		if asks is None:
 			log('no greeting from %s, asking for politeness' % sender)
 			self._send(sender, fit_sms(POLITENESS_REPLY))
 			return
 		history = conversation['history'] if conversation else []
-		try:
-			answer = ' '.join(self.ask(text, history).split())
-		except (RuntimeError, subprocess.TimeoutExpired, OSError) as e:
-			log('claude error: %s' % e)
-			answer = ''
+		answer = ''
+		if asks:
+			try:
+				answer = ' '.join(self.ask(text, history).split())
+			except (RuntimeError, subprocess.TimeoutExpired, OSError) as e:
+				log('claude error: %s' % e)
+		if conversation is None and (answer or not asks):
+			# The introduction comes from here, word for word, not from Claude
+			answer = (INTRO_TEXT + ' ' + answer).strip()
 		# One SMS, or two at most for a longer answer
 		for part in split_sms(answer) if answer else [ERROR_REPLY]:
 			self._send(sender, part)
@@ -161,6 +176,8 @@ def main():
 	parser.add_argument('--conversation-timeout', type=float, default=30, metavar='MINUTES',
 		help='a conversation ends after this many minutes without SMS from its number (default: 30)')
 	parser.add_argument('--trace', action='store_true', help='log every byte exchanged with the module')
+	parser.add_argument('--humour', action='store_true',
+		help='ask Claude for a touch of humour in its answers')
 	parser.add_argument('--sms-log', metavar='FILE',
 		help='append one line per SMS received or sent to this file, e.g. /var/log/sms')
 	parser.add_argument('--claude', default='claude', metavar='PATH',
@@ -173,7 +190,7 @@ def main():
 	modem = Modem(args.port, args.trace, args.sms_log)
 	log('purged %d SMS already in memory' % modem.purge_sms())
 	responder = Responder(modem.send_sms, args.allow, args.conversation_timeout,
-		lambda text, history: ask_claude(text, history, args.model, args.claude))
+		lambda text, history: ask_claude(text, history, args.model, args.claude, args.humour))
 	log('ready on %s, waiting for SMS' % modem.port)
 	modem.serve(responder.on_sms)
 
