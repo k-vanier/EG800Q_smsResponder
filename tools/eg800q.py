@@ -11,6 +11,7 @@ import serial
 
 SCAN_PERIOD = 5  # seconds between two checks for unread SMS
 SMS_LENGTH = 160  # GSM 7-bit characters in a single SMS
+MAX_TRIES = 3  # attempts to send a reply before the SMS is deleted anyway
 
 # GSM 03.38 basic character set: the module sends and expects these codes
 # in text mode with AT+CSCS="GSM" (for example 0x04 is "è").
@@ -65,7 +66,7 @@ def is_phone_number(sender):
 class Modem:
 	def __init__(self, port):
 		self.ser = serial.Serial(port, 115200, timeout=0.5)
-		self.pending = []  # indexes of received SMS not handled yet
+		self.new_sms = False  # set by +CMTI to scan without waiting
 		for cmd in ('AT', 'ATE0', 'AT+CMEE=2', 'AT+CMGF=1', 'AT+CSCS="GSM"', 'AT+CNMI=2,1,0,0,0'):
 			self.command(cmd)
 
@@ -74,16 +75,11 @@ class Modem:
 		return self.ser.readline().decode('latin-1').strip()
 
 	def _urc(self, line):
-		# +CMTI: "SM",3 -> new SMS stored at index 3
-		m = re.match(r'\+CMTI: "\w+",(\d+)', line)
-		if m:
-			self._add_pending(int(m.group(1)))
+		# +CMTI: "ME",3 -> new SMS stored at index 3
+		if line.startswith('+CMTI:'):
+			self.new_sms = True
 			return True
 		return False
-
-	def _add_pending(self, index):
-		if index not in self.pending:
-			self.pending.append(index)
 
 	def _wait_result(self, cmd, timeout):
 		lines = []
@@ -115,49 +111,60 @@ class Modem:
 		self.ser.write(gsm_encode(text) + b'\x1a')
 		return self._wait_result(cmd, 60)
 
-	def read_sms(self, index):
-		"""Returns (sender, text) of the SMS stored at index, or None."""
-		lines = self.command('AT+CMGR=%d' % index)
-		if not lines:
-			return None
-		# +CMGR: "REC UNREAD","+33612345678","","26/10/24,14:32:10+08"
-		m = re.match(r'\+CMGR: "[^"]*","([^"]*)"', lines[0])
-		if not m:
-			log('index %d: unreadable header %r' % (index, lines[0]))
-			return None
-		return m.group(1), gsm_decode(' '.join(lines[1:])).strip()
+	def list_sms(self):
+		"""Returns [(index, sender, text)] for every SMS stored in the module.
 
-	def scan_unread(self):
-		# On firmware EG800QEULCR01A07M04, AT+CMGL="REC UNREAD" always returns an
-		# empty list, so all messages are listed and the unread ones kept.
+		Read and unread messages alike: AT+CMGL="REC UNREAD" always returns an
+		empty list on firmware EG800QEULCR01A07M04, and listing marks messages
+		as read anyway."""
+		messages = []
 		for line in self.command('AT+CMGL="ALL"', 10):
-			m = re.match(r'\+CMGL: (\d+),"REC UNREAD"', line)
+			# +CMGL: 3,"REC UNREAD","+33612345678",,"26/10/24,14:32:10+08"
+			m = re.match(r'\+CMGL: (\d+),"[^"]*","([^"]*)"', line)
 			if m:
-				self._add_pending(int(m.group(1)))
+				messages.append([int(m.group(1)), m.group(2), ''])
+			elif messages:
+				body = messages[-1][2]
+				messages[-1][2] = (body + ' ' if body else '') + gsm_decode(line)
+		return [(index, sender, text.strip()) for index, sender, text in messages]
 
-	def serve(self, on_sms, delete=False):
-		"""Calls on_sms(sender, text) for each incoming SMS, forever.
+	def delete_sms(self, index):
+		self.command('AT+CMGD=%d' % index)
+
+	def serve(self, on_sms):
+		"""For each SMS stored in the module, forever: calls on_sms(sender, text),
+		then deletes the SMS, so the 10-message memory never fills up.
+
+		An SMS is kept for another try only if on_sms raises ModemError (the
+		reply could not be sent), at most MAX_TRIES times.
 
 		+CMTI only reaches the port set by AT+QCFG="urc/port" (USB by default),
-		so unread messages are also listed every few seconds."""
+		so the memory is also listed every few seconds."""
+		tries = {}
 		last_scan = 0
 		while True:
-			if time.time() - last_scan > SCAN_PERIOD:
+			if self.new_sms or time.time() - last_scan > SCAN_PERIOD:
+				self.new_sms = False
 				last_scan = time.time()
 				try:
-					self.scan_unread()
+					messages = self.list_sms()
 				except ModemError as e:
 					log('error: %s' % e)
-			while self.pending:
-				index = self.pending.pop(0)
-				try:
-					sms = self.read_sms(index)
-					if sms:
-						log('SMS %d from %s: %r' % (index, sms[0], sms[1]))
-						if on_sms(*sms) and delete:
-							self.command('AT+CMGD=%d' % index)
-				except ModemError as e:
-					log('error: %s' % e)
+					messages = []
+				for index, sender, text in messages:
+					log('SMS %d from %s: %r' % (index, sender, text))
+					try:
+						on_sms(sender, text)
+					except ModemError as e:
+						tries[index] = tries.get(index, 0) + 1
+						log('error: %s (try %d/%d)' % (e, tries[index], MAX_TRIES))
+						if tries[index] < MAX_TRIES:
+							continue
+					tries.pop(index, None)
+					try:
+						self.delete_sms(index)
+					except ModemError as e:
+						log('error: %s' % e)
 			line = self._readline()
 			if line:
 				self._urc(line)

@@ -44,8 +44,12 @@ python tools/sms_time_server.py COM18
 ```
 
 - Only plain phone numbers get an answer, never operator short codes. Other messages are logged and left alone.
-- The server lists the SMS every 5 seconds and answers the unread ones. It does not rely on `+CMTI` alone, because the module sends it to the USB AT port by default (`AT+QCFG="urc/port"` is `usbat`), not to the UART. Messages received while the server was stopped are answered too.
-- The module stores SMS in its own memory (`ME`), which holds only **10 messages**. `--delete` removes each answered request. Without it, the memory fills up and new SMS stop arriving.
+Both servers (this one and `sms_claude.py`) work the same way, in `tools/eg800q.py`:
+
+- Every 5 seconds the server lists **every SMS stored** in the module, read or not. For each one it reads it, answers if needed, then **deletes it**, even when it was not answered. The module's memory (`ME`) holds only **10 messages**, and new SMS stop arriving once it is full.
+- If the reply cannot be sent, the SMS is kept and tried again, at most 3 times, then deleted.
+- At startup, messages already in memory are handled like new ones, so they may get an answer.
+- The server does not rely on `+CMTI` alone, because the module sends it to the USB AT port by default (`AT+QCFG="urc/port"` is `usbat`), not to the UART.
 
 ## SMS questions answered by Claude
 
@@ -58,7 +62,7 @@ sudo apt install python3-serial
 curl -fsSL https://claude.ai/install.sh | bash
 claude setup-token
 export CLAUDE_CODE_OAUTH_TOKEN=<token printed by setup-token>
-python3 tools/sms_claude.py /dev/ttyUSB0 --delete --allow +33612345678
+python3 tools/sms_claude.py /dev/ttyUSB0 --allow +33612345678
 ```
 
 - `claude setup-token` creates a long-lived token from a Claude subscription. `ANTHROPIC_API_KEY` works too.

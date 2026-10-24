@@ -3,7 +3,9 @@
 # Claude Code's answer, cut to fit in a single SMS (160 characters).
 # Runs on Linux next to the EG800Q-EU and calls the Claude Code CLI (claude -p).
 #
-# Usage: python3 sms_claude.py /dev/ttyUSB0 [--delete] [--allow +336...] [--model NAME]
+# Every SMS is deleted from the module once handled, answered or not.
+#
+# Usage: python3 sms_claude.py /dev/ttyUSB0 [--allow +336...] [--model NAME]
 # Auth: export CLAUDE_CODE_OAUTH_TOKEN=... (from "claude setup-token")
 #       or ANTHROPIC_API_KEY=...
 # Needs pyserial and the claude CLI in PATH.
@@ -52,7 +54,6 @@ def ask_claude(question, model):
 def main():
 	parser = argparse.ArgumentParser(description='Answers incoming SMS questions with Claude Code.')
 	parser.add_argument('port', help='serial port of the module, e.g. /dev/ttyUSB0')
-	parser.add_argument('--delete', action='store_true', help='delete answered SMS from the module')
 	parser.add_argument('--allow', action='append', metavar='NUMBER',
 		help='only answer this number (repeatable, e.g. +33612345678); default: any phone number')
 	parser.add_argument('--model', help='Claude model alias or name passed to claude --model')
@@ -65,10 +66,10 @@ def main():
 
 	def on_sms(sender, text):
 		if not is_phone_number(sender) or not text:
-			return False
+			return
 		if args.allow and sender not in args.allow:
 			log('ignored, %s is not in --allow' % sender)
-			return False
+			return
 		try:
 			reply = fit_sms(ask_claude(text, args.model)) or ERROR_REPLY
 		except (RuntimeError, subprocess.TimeoutExpired, OSError) as e:
@@ -76,10 +77,9 @@ def main():
 			reply = ERROR_REPLY
 		modem.send_sms(sender, reply)
 		log('replied to %s: %s' % (sender, reply))
-		return True
 
 	log('ready on %s, waiting for SMS' % args.port)
-	modem.serve(on_sms, args.delete)
+	modem.serve(on_sms)
 
 
 if __name__ == '__main__':

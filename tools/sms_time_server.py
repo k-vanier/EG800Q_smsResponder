@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 # SMS time server: answers "heure" (or "time") with the current time.
 # Runs on the PC connected to the EG800Q-EU and drives it with AT commands.
-# Usage: python sms_time_server.py COM18 [--delete]
-#   --delete  deletes each answered request from the SIM so storage never fills up
+# Every SMS is deleted from the module once handled, answered or not.
+# Usage: python sms_time_server.py COM18
 # Needs pyserial: pip install pyserial
 
 import argparse
@@ -22,21 +22,19 @@ def time_text():
 def main():
 	parser = argparse.ArgumentParser(description='Answers "heure" SMS with the current time.')
 	parser.add_argument('port', help='serial port of the module, e.g. COM18 or /dev/ttyUSB0')
-	parser.add_argument('--delete', action='store_true', help='delete answered requests from the SIM')
 	args = parser.parse_args()
 
 	modem = Modem(args.port)
 
 	def on_sms(sender, text):
 		if text.lower() not in KEYWORDS or not is_phone_number(sender):
-			return False
+			return
 		reply = time_text()
 		modem.send_sms(sender, reply)
 		log('replied to %s: %s' % (sender, reply))
-		return True
 
 	log('ready on %s, waiting for SMS' % args.port)
-	modem.serve(on_sms, args.delete)
+	modem.serve(on_sms)
 
 
 if __name__ == '__main__':
