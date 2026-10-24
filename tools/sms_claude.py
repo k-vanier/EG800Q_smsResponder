@@ -90,7 +90,9 @@ def ask_claude(text, history, model, claude='claude'):
 		result = subprocess.run(cmd, input=build_prompt(text, history), capture_output=True,
 			encoding='utf-8', errors='replace', timeout=CLAUDE_TIMEOUT, cwd=cwd)
 	if result.returncode != 0:
-		raise RuntimeError('claude exited with %d: %s' % (result.returncode, result.stderr.strip()[:300]))
+		# claude -p may print its error on stdout rather than stderr
+		output = ' | '.join(o.strip() for o in (result.stderr, result.stdout) if o.strip())
+		raise RuntimeError('claude exited with %d: %s' % (result.returncode, output[:300] or '(no output)'))
 	return result.stdout.strip()
 
 
