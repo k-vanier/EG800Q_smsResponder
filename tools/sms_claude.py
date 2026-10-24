@@ -1,11 +1,10 @@
 #!/usr/bin/env python3
 # Answers every incoming SMS with Claude, in French: each SMS is a message in
-# a conversation with its sender, the reply is Claude Code's answer, cut to
-# fit in a single SMS (160 characters).
-# Runs on Linux or FreeBSD next to the EG800Q-EU and calls the Claude Code CLI
-# (claude -p). Claude Code has no FreeBSD build: there, --ssh runs it on a
-# Linux machine, or --claude points to a binary that runs through Linux
-# binary compatibility.
+# a conversation with its sender, the reply is Claude's answer, cut to fit in
+# a single SMS (160 characters).
+# Runs on FreeBSD (or Linux) next to the EG800Q-EU and calls the Claude API
+# with the anthropic Python SDK. Claude can search the web (web_search runs on
+# Anthropic's side) and has no other tool.
 #
 # A conversation is all the SMS from one number until it stays silent for
 # --conversation-timeout minutes. Its first SMS must start with "Bonjour" or
@@ -15,31 +14,29 @@
 # After that, every SMS is deleted once handled, answered or not.
 #
 # Usage: python3 sms_claude.py PORT [--allow +336...] [--model NAME]
-#                              [--conversation-timeout MINUTES]
-#                              [--claude PATH | --ssh HOST] [--trace]
-#   PORT: /dev/ttyUSB0 on Linux, /dev/cuaU0 on FreeBSD
-# Auth: export CLAUDE_CODE_OAUTH_TOKEN=... (from "claude setup-token")
-#       or ANTHROPIC_API_KEY=... With --ssh, the token is set on the remote
-#       machine, where claude runs.
-# Needs pyserial, and the claude CLI in PATH (or --claude, or --ssh).
+#                              [--conversation-timeout MINUTES] [--trace]
+#   PORT: /dev/cuaU0 on FreeBSD, /dev/ttyUSB0 on Linux
+# Auth: export ANTHROPIC_API_KEY=... (from console.anthropic.com)
+# Needs pyserial and anthropic.
 
 import argparse
 import datetime
 import os
 import re
-import shlex
-import subprocess
-import tempfile
 import time
 import unicodedata
 
+import anthropic
+
 from eg800q import Modem, fit_sms, is_phone_number, log
 
-CLAUDE_TIMEOUT = 120  # seconds
-MAX_TURNS = 5  # enough for a few web searches before the answer
+MODEL = 'claude-opus-5-5'
+EFFORT = 'low'  # short chat answers: low effort is enough and costs less
+CLAUDE_TIMEOUT = 120  # seconds per API request
+MAX_TOKENS = 16000  # thinking and searches included; the answer itself is short
+MAX_SEARCHES = 3  # web searches Claude may run for one SMS
+MAX_CONTINUATIONS = 3  # pause_turn: the server paused a long search loop
 MAX_HISTORY = 10  # previous exchanges of the conversation given to Claude
-# With --ssh: shell file on the remote machine that exports CLAUDE_CODE_OAUTH_TOKEN
-REMOTE_ENV = '"$HOME/.config/sms_claude.env"'
 GREETINGS = ('bonjour', 'bonsoir')
 ERROR_REPLY = 'Désolé, je ne peux pas répondre pour le moment.'
 POLITENESS_REPLY = ('La politesse avant tout : commencez par « Bonjour » '
@@ -54,7 +51,7 @@ SYSTEM_PROMPT = """Tu réponds à des SMS. Ta réponse est renvoyée telle quell
 - Une ou deux phrases, sans lien internet.
 - Tu peux faire une recherche sur internet quand la question porte sur l'actualité, la météo,
   des horaires ou d'autres faits récents. Tu ne peux rien faire d'autre. Si tu ne sais pas, dis-le brièvement.
-- Si la conversation a déjà commencé, ses échanges précédents sont donnés avant le nouveau message.
+- Les messages précédents sont ceux de la conversation en cours avec ce correspondant.
 Date et heure actuelles : {now}."""
 
 
@@ -63,51 +60,53 @@ def is_greeting(text):
 	return re.match(r'\W*(%s)\b' % '|'.join(GREETINGS), plain) is not None
 
 
-def build_prompt(text, history):
-	if not history:
-		return text
-	lines = ['Échanges précédents de la conversation :']
+def build_messages(text, history):
+	messages = []
 	for question, answer in history:
-		lines += ['Correspondant : ' + question, 'Toi : ' + answer]
-	lines += ['', 'Nouveau message :', text]
-	return '\n'.join(lines)
+		messages += [{'role': 'user', 'content': question}, {'role': 'assistant', 'content': answer}]
+	return messages + [{'role': 'user', 'content': text}]
 
 
-def ask_claude(text, history, model, claude='claude', ssh=None):
+def final_text(content):
+	# With web search the reply interleaves text, server_tool_use and
+	# web_search_tool_result blocks: the answer is the text after the last search.
+	parts = []
+	for block in content:
+		if block.type == 'text':
+			parts.append(block.text)
+		elif block.type != 'fallback':
+			parts = []
+	return ''.join(parts).strip()
+
+
+def ask_claude(client, text, history, model):
 	now = datetime.datetime.now()
 	now = '%s %d %s %d, %s' % (DAYS[now.weekday()], now.day, MONTHS[now.month - 1], now.year, now.strftime('%H:%M'))
-	cmd = [claude, '-p',
-		'--system-prompt', SYSTEM_PROMPT.format(now=now),
-		# Anyone who knows the number can send a prompt, so the only tool is
-		# WebSearch: it runs on Anthropic's side. No WebFetch, which would load
-		# pages from this machine and could reach the local network.
-		'--tools', 'WebSearch',
-		'--allowedTools', 'WebSearch',
-		'--disallowedTools', 'mcp__*',
-		'--strict-mcp-config',
-		'--no-session-persistence',
-		'--max-turns', str(MAX_TURNS),
-		'--output-format', 'text']
-	if model:
-		cmd += ['--model', model]
-	if ssh:
-		# A command run by ssh gets neither ~/.local/bin (where the installer
-		# puts claude) in PATH nor the token exported in an interactive shell:
-		# the token is read from REMOTE_ENV if that file exists. Same
-		# empty-directory rule there. ssh joins its arguments into one shell
-		# command line, so each one is quoted.
-		remote = ('PATH="$HOME/.local/bin:$PATH"; [ -f %s ] && . %s; '
-			'd=$(mktemp -d) || exit 1; cd "$d" || exit 1; %s; r=$?; cd /; rmdir "$d"; exit $r'
-			% (REMOTE_ENV, REMOTE_ENV, shlex.join(cmd)))
-		cmd = ['ssh', '-T', '-o', 'BatchMode=yes', ssh, remote]
-	# Empty working directory so no project file or CLAUDE.md is picked up;
-	# the message goes through stdin so it is never parsed as an option.
-	with tempfile.TemporaryDirectory() as cwd:
-		result = subprocess.run(cmd, input=build_prompt(text, history), capture_output=True,
-			encoding='utf-8', errors='replace', timeout=CLAUDE_TIMEOUT, cwd=cwd)
-	if result.returncode != 0:
-		raise RuntimeError('claude exited with %d: %s' % (result.returncode, result.stderr.strip()[:300]))
-	return result.stdout.strip()
+	messages = build_messages(text, history)
+	for _ in range(MAX_CONTINUATIONS + 1):
+		response = client.with_options(timeout=CLAUDE_TIMEOUT).beta.messages.create(
+			model=model,
+			max_tokens=MAX_TOKENS,
+			system=SYSTEM_PROMPT.format(now=now),
+			messages=messages,
+			output_config={'effort': EFFORT},
+			# Only server-side web search: anyone who knows the number can send a
+			# prompt, and nothing runs or is fetched from this machine.
+			tools=[{'type': 'web_search_20260209', 'name': 'web_search', 'max_uses': MAX_SEARCHES}],
+			# A safety decline is re-run on the model Anthropic recommends for it
+			betas=['server-side-fallback-2026-07-01'],
+			fallbacks='default',
+		)
+		if response.stop_reason != 'pause_turn':
+			break
+		# The server paused its search loop: send the turn back as is to resume
+		messages = messages + [{'role': 'assistant', 'content': response.content}]
+	if response.stop_reason == 'refusal':
+		category = response.stop_details.category if response.stop_details else None
+		raise RuntimeError('refused (%s)' % category)
+	if response.stop_reason == 'pause_turn':
+		raise RuntimeError('web search still paused after %d continuations' % MAX_CONTINUATIONS)
+	return final_text(response.content)
 
 
 class Responder:
@@ -123,6 +122,21 @@ class Responder:
 		log('sending to %s: %s' % (sender, reply))
 		self.send_sms(sender, reply)
 		log('sent to %s' % sender)
+
+	def _answer(self, text, history):
+		try:
+			return fit_sms(self.ask(text, history))
+		except anthropic.AuthenticationError:
+			log('claude error: ANTHROPIC_API_KEY is missing or invalid')
+		except anthropic.RateLimitError:
+			log('claude error: rate limited, or no credit left on the API account')
+		except anthropic.APIStatusError as e:
+			log('claude error: HTTP %d %s' % (e.status_code, e.message))
+		except anthropic.APIConnectionError as e:
+			log('claude error: cannot reach the API (%s)' % e)
+		except RuntimeError as e:
+			log('claude error: %s' % e)
+		return ''
 
 	def on_sms(self, sender, text):
 		if not is_phone_number(sender) or not text:
@@ -140,11 +154,7 @@ class Responder:
 			self._send(sender, fit_sms(POLITENESS_REPLY))
 			return
 		history = conversation['history'] if conversation else []
-		try:
-			answer = fit_sms(self.ask(text, history))
-		except (RuntimeError, subprocess.TimeoutExpired, OSError) as e:
-			log('claude error: %s' % e)
-			answer = ''
+		answer = self._answer(text, history)
 		self._send(sender, answer or ERROR_REPLY)
 		if conversation is None:
 			log('conversation with %s started' % sender)
@@ -155,27 +165,24 @@ class Responder:
 
 
 def main():
-	parser = argparse.ArgumentParser(description='Answers incoming SMS with Claude Code, in French.')
-	parser.add_argument('port', help='serial port of the module: /dev/ttyUSB0 on Linux, /dev/cuaU0 on FreeBSD')
+	parser = argparse.ArgumentParser(description='Answers incoming SMS with Claude, in French.')
+	parser.add_argument('port', help='serial port of the module: /dev/cuaU0 on FreeBSD, /dev/ttyUSB0 on Linux')
 	parser.add_argument('--allow', action='append', metavar='NUMBER',
 		help='only answer this number (repeatable, e.g. +33612345678); default: any phone number')
-	parser.add_argument('--model', help='Claude model alias or name passed to claude --model')
+	parser.add_argument('--model', default=MODEL, help='Claude model (default: %s)' % MODEL)
 	parser.add_argument('--conversation-timeout', type=float, default=30, metavar='MINUTES',
 		help='a conversation ends after this many minutes without SMS from its number (default: 30)')
 	parser.add_argument('--trace', action='store_true', help='log every byte exchanged with the module')
-	parser.add_argument('--claude', default='claude', metavar='PATH',
-		help='claude executable, on the remote machine with --ssh (default: claude, found in PATH)')
-	parser.add_argument('--ssh', metavar='HOST',
-		help='run claude on this Linux machine through ssh (key login; token in ~/.config/sms_claude.env there)')
 	args = parser.parse_args()
 
-	if not args.ssh and not os.environ.get('CLAUDE_CODE_OAUTH_TOKEN') and not os.environ.get('ANTHROPIC_API_KEY'):
-		log('warning: neither CLAUDE_CODE_OAUTH_TOKEN nor ANTHROPIC_API_KEY is set')
+	if not os.environ.get('ANTHROPIC_API_KEY'):
+		log('warning: ANTHROPIC_API_KEY is not set')
+	client = anthropic.Anthropic()
 
 	modem = Modem(args.port, args.trace)
 	log('purged %d SMS already in memory' % modem.purge_sms())
 	responder = Responder(modem.send_sms, args.allow, args.conversation_timeout,
-		lambda text, history: ask_claude(text, history, args.model, args.claude, args.ssh))
+		lambda text, history: ask_claude(client, text, history, args.model))
 	log('ready on %s, waiting for SMS' % args.port)
 	modem.serve(responder.on_sms)
 

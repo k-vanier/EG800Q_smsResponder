@@ -1,7 +1,7 @@
 #!/bin/sh
 
 # PROVIDE: sms_claude
-# REQUIRE: LOGIN
+# REQUIRE: LOGIN NETWORKING
 # KEYWORD: shutdown
 #
 # Répond par Claude aux SMS reçus par le module EG800Q-EU, dès le démarrage.
@@ -9,12 +9,11 @@
 #   sms_claude_enable="YES"
 #   sms_claude_user="sms"            utilisateur non privilégié, membre du groupe dialer
 #   sms_claude_port="/dev/cuaU0"
-#   sms_claude_args="--ssh omv"      options de sms_claude.py, ex. "--claude /chemin/claude"
+#   sms_claude_args=""               options de sms_claude.py, ex. "--allow +33612345678"
 #   sms_claude_dir="/usr/local/libexec/eg800q"     dossier de sms_claude.py et eg800q.py
-#   sms_claude_python="/usr/local/bin/python3"
+#   sms_claude_python="/usr/local/libexec/eg800q/venv/bin/python"
 #   sms_claude_env_file="/usr/local/etc/sms_claude.env"
-#       fichier facultatif, CLAUDE_CODE_OAUTH_TOKEN=... (chmod 600), si claude
-#       tourne sur cette machine ; avec --ssh, le token est sur la machine distante
+#       ANTHROPIC_API_KEY=sk-ant-... (root:wheel, chmod 600)
 #
 # daemon(8) relance le script 5 s après chaque sortie (module débranché...) et
 # envoie sa sortie dans syslog (/var/log/messages, tag sms_claude).
@@ -31,11 +30,12 @@ load_rc_config $name
 : ${sms_claude_port:="/dev/cuaU0"}
 : ${sms_claude_args:=""}
 : ${sms_claude_dir:="/usr/local/libexec/eg800q"}
-: ${sms_claude_python:="/usr/local/bin/python3"}
+: ${sms_claude_python:="${sms_claude_dir}/venv/bin/python"}
+: ${sms_claude_env_file:="/usr/local/etc/sms_claude.env"}
 
 pidfile="/var/run/${name}.pid"
 command="/usr/sbin/daemon"
 command_args="-P ${pidfile} -r -R 5 -S -T ${name} -u ${sms_claude_user} ${sms_claude_python} ${sms_claude_dir}/sms_claude.py ${sms_claude_port} ${sms_claude_args}"
-required_files="${sms_claude_dir}/sms_claude.py ${sms_claude_dir}/eg800q.py"
+required_files="${sms_claude_dir}/sms_claude.py ${sms_claude_dir}/eg800q.py ${sms_claude_env_file}"
 
 run_rc_command "$1"
