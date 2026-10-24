@@ -1,0 +1,59 @@
+#!/bin/sh
+
+# PROVIDE: sms_claude
+# REQUIRE: LOGIN NETWORKING
+# KEYWORD: shutdown
+#
+# Répond par Claude aux SMS reçus par le module EG800Q-EU, dès le démarrage.
+# Réglages dans /etc/rc.conf (avec sysrc) :
+#   sms_claude_enable="YES"
+#   sms_claude_user="bsdouille"      utilisateur pour qui claude fonctionne déjà,
+#                                    membre du groupe dialer
+#   sms_claude_port="usb"            port USB du module (pyusb, règle devd/eg800q.conf),
+#                                    ou "auto" pour l'adaptateur FTDI, ou /dev/cuaU0
+#   sms_claude_args="--claude /usr/local/bin/claude"
+#                                    options de sms_claude.py (chemin de claude, --allow...)
+#   sms_claude_dir="/usr/local/libexec/eg800q"     dossier de sms_claude.py et eg800q.py
+#   sms_claude_python="/usr/local/bin/python3"
+#   sms_claude_env_file="/usr/local/etc/sms_claude.env"
+#       facultatif : CLAUDE_CODE_OAUTH_TOKEN=... (root:wheel, chmod 600), si claude
+#       n'est pas déjà connecté pour cet utilisateur
+#
+# daemon(8) relance le script 5 s après chaque sortie (module débranché...) et
+# envoie sa sortie dans syslog (/var/log/messages, tag sms_claude).
+
+. /etc/rc.subr
+
+name="sms_claude"
+rcvar="sms_claude_enable"
+
+load_rc_config $name
+
+: ${sms_claude_enable:="NO"}
+: ${sms_claude_user:="bsdouille"}
+: ${sms_claude_port:="usb"}
+: ${sms_claude_args:=""}
+: ${sms_claude_dir:="/usr/local/libexec/eg800q"}
+: ${sms_claude_python:="/usr/local/bin/python3"}
+
+# claude keeps its login and settings in the home directory of the user it
+# runs as: HOME must point there, not to root's.
+sms_claude_home=$(pw usershow "${sms_claude_user}" 2>/dev/null | cut -d: -f9)
+sms_claude_env="HOME=${sms_claude_home} ${sms_claude_env}"
+
+pidfile="/var/run/${name}.pid"
+command="/usr/sbin/daemon"
+# No daemon -u: rc.subr already starts daemon as ${sms_claude_user} (su -m),
+# because that variable is set, and a non-root daemon cannot switch user.
+command_args="-P ${pidfile} -r -R 5 -S -T ${name} ${sms_claude_python} ${sms_claude_dir}/sms_claude.py ${sms_claude_port} ${sms_claude_args}"
+required_files="${sms_claude_dir}/sms_claude.py ${sms_claude_dir}/eg800q.py"
+start_precmd="${name}_prestart"
+
+# daemon runs as the user and writes its pidfile itself: create it for the
+# user, since only root can write in /var/run.
+sms_claude_prestart()
+{
+	install -o "${sms_claude_user}" -m 644 /dev/null "${pidfile}"
+}
+
+run_rc_command "$1"
