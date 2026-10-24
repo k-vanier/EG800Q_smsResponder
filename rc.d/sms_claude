@@ -43,11 +43,13 @@ sms_claude_env="HOME=${sms_claude_home} ${sms_claude_env}"
 
 pidfile="/var/run/${name}.pid"
 command="/usr/sbin/daemon"
-command_args="-P ${pidfile} -r -R 5 -S -T ${name} -u ${sms_claude_user} ${sms_claude_python} ${sms_claude_dir}/sms_claude.py ${sms_claude_port} ${sms_claude_args}"
+# No daemon -u: rc.subr already starts daemon as ${sms_claude_user} (su -m),
+# because that variable is set, and a non-root daemon cannot switch user.
+command_args="-P ${pidfile} -r -R 5 -S -T ${name} ${sms_claude_python} ${sms_claude_dir}/sms_claude.py ${sms_claude_port} ${sms_claude_args}"
 required_files="${sms_claude_dir}/sms_claude.py ${sms_claude_dir}/eg800q.py"
 start_precmd="${name}_prestart"
 
-# daemon -u drops privileges before it writes its pidfile: create it for the
+# daemon runs as the user and writes its pidfile itself: create it for the
 # user, since only root can write in /var/run.
 sms_claude_prestart()
 {
