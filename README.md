@@ -21,7 +21,8 @@ Still to check: is there a QuecPython firmware for the EG800Q-EU? The standard f
 | `tools/at_check.py` | PC (Windows or FreeBSD) | Sends AT commands over the USB AT port and prints identity, firmware, SIM, signal, registration and bands |
 | `tools/eg800q.py` | — | Shared code: AT commands over the UART, GSM 7-bit text, loop that picks up incoming SMS |
 | `tools/sms_time_server.py` | PC (Windows, Linux or FreeBSD) | SMS time server: answers `heure` or `time` with the current time |
-| `tools/sms_claude.py` | Linux | Answers every incoming SMS question with Claude Code, in a single SMS |
+| `tools/sms_claude.py` | Linux or FreeBSD | Answers every incoming SMS question with Claude Code, in a single SMS |
+| `rc.d/sms_claude` | FreeBSD | rc.d script that runs `sms_claude.py` at boot under `daemon(8)` |
 | `usr/check_eg800q.py` | Module (QuecPython REPL) | Prints model, firmware and IMEI, and lists the QuecPython modules the firmware provides |
 
 ## Usage
@@ -84,6 +85,43 @@ python3 tools/sms_claude.py /dev/ttyUSB0 --allow +33612345678
 - If Claude fails or takes longer than 2 minutes, the sender gets `Désolé, je ne peux pas répondre pour le moment.`
 - A question with a character missing from the GSM alphabet (`ç`, `’`, an emoji…) is sent by the phone in UCS2, and the module prints it as hex (`0045006E…`). The script decodes it back to text, emoji included (😀, ❤️, ✅, flags, skin tones, 👨‍👩‍👧). Two limits: a single emoji alone without variation selector (`2764`, ❤) cannot be told from a number and stays as hex, and replies cannot contain emoji, since they are sent in the GSM alphabet.
 - A question longer than 160 characters arrives as several SMS, and each part is answered separately.
+
+## FreeBSD
+
+`sms_claude.py` and `eg800q.py` run unchanged on FreeBSD. Three things differ from Linux.
+
+**Serial port.** A USB-serial adapter shows up as `/dev/cuaU0` (use `cuaU`, not `ttyU`, which waits for the carrier signal). It belongs to `uucp:dialer`, so the user that runs the script must be in the `dialer` group.
+
+**Python.** Install Python and pyserial from packages (the `py311-` prefix follows the default Python version, check with `pkg search pyserial`):
+
+```
+pkg install python3 py311-pyserial
+```
+
+**Claude Code has no FreeBSD build.** Anthropic only ships macOS, Windows and Linux binaries. Two ways around it:
+
+- `--ssh HOST` (recommended): `claude` runs on a Linux machine through ssh, for example the OpenMediaVault box. The FreeBSD user needs a key login to it (`ssh-keygen`, then `ssh-copy-id HOST`, and one manual `ssh HOST` to accept the host key). On the Linux machine, put the token in `~/.config/sms_claude.env` (`chmod 600`):
+
+  ```
+  export CLAUDE_CODE_OAUTH_TOKEN=...
+  ```
+
+  The remote command adds `~/.local/bin` to `PATH`, reads that file, and runs `claude` in an empty temporary directory. `--claude PATH` sets the path of `claude` on the remote machine if it is elsewhere.
+- `--claude PATH`: a `claude` binary run locally. The Linux x64 binary may run through FreeBSD's Linux binary compatibility (`sysrc linux_enable=YES`, `service linux start`), but this is not tested.
+
+**Service at boot.** `rc.d/sms_claude` runs the script under `daemon(8)` as an unprivileged user, restarts it 5 s after any exit, and sends its log to syslog (`/var/log/messages`, tag `sms_claude`):
+
+```
+pw useradd sms -m -G dialer -s /usr/sbin/nologin
+mkdir -p /usr/local/libexec/eg800q
+install -m 444 tools/eg800q.py tools/sms_claude.py /usr/local/libexec/eg800q/
+install -m 555 rc.d/sms_claude /usr/local/etc/rc.d/sms_claude
+sysrc sms_claude_enable=YES
+sysrc sms_claude_args="--ssh omv"
+service sms_claude start
+```
+
+Other settings (`sysrc`): `sms_claude_user` (default `sms`), `sms_claude_port` (default `/dev/cuaU0`), `sms_claude_dir`, `sms_claude_python` (default `/usr/local/bin/python3`). If `claude` runs on the FreeBSD machine itself, put `CLAUDE_CODE_OAUTH_TOKEN=...` in a `chmod 600` file and set `sysrc sms_claude_env_file=/usr/local/etc/sms_claude.env`. With `--ssh`, the `sms` user needs its own ssh key: `su -m sms -c 'env HOME=/home/sms ssh-keygen -t ed25519'`, then `su -m sms -c 'env HOME=/home/sms ssh-copy-id HOST'` and one `su -m sms -c 'env HOME=/home/sms ssh HOST true'` to accept the host key.
 
 ## Tested module
 

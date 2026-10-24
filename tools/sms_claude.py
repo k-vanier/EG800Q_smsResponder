@@ -2,7 +2,10 @@
 # Answers every incoming SMS with Claude, in French: each SMS is a message in
 # a conversation with its sender, the reply is Claude Code's answer, cut to
 # fit in a single SMS (160 characters).
-# Runs on Linux next to the EG800Q-EU and calls the Claude Code CLI (claude -p).
+# Runs on Linux or FreeBSD next to the EG800Q-EU and calls the Claude Code CLI
+# (claude -p). Claude Code has no FreeBSD build: there, --ssh runs it on a
+# Linux machine, or --claude points to a binary that runs through Linux
+# binary compatibility.
 #
 # A conversation is all the SMS from one number until it stays silent for
 # --conversation-timeout minutes. Its first SMS must start with "Bonjour" or
@@ -11,16 +14,20 @@
 # At startup, every SMS already stored in the module is deleted without answer.
 # After that, every SMS is deleted once handled, answered or not.
 #
-# Usage: python3 sms_claude.py /dev/ttyUSB0 [--allow +336...] [--model NAME]
+# Usage: python3 sms_claude.py PORT [--allow +336...] [--model NAME]
 #                              [--conversation-timeout MINUTES]
+#                              [--claude PATH | --ssh HOST] [--trace]
+#   PORT: /dev/ttyUSB0 on Linux, /dev/cuaU0 on FreeBSD
 # Auth: export CLAUDE_CODE_OAUTH_TOKEN=... (from "claude setup-token")
-#       or ANTHROPIC_API_KEY=...
-# Needs pyserial and the claude CLI in PATH.
+#       or ANTHROPIC_API_KEY=... With --ssh, the token is set on the remote
+#       machine, where claude runs.
+# Needs pyserial, and the claude CLI in PATH (or --claude, or --ssh).
 
 import argparse
 import datetime
 import os
 import re
+import shlex
 import subprocess
 import tempfile
 import time
@@ -31,6 +38,8 @@ from eg800q import Modem, fit_sms, is_phone_number, log
 CLAUDE_TIMEOUT = 120  # seconds
 MAX_TURNS = 5  # enough for a few web searches before the answer
 MAX_HISTORY = 10  # previous exchanges of the conversation given to Claude
+# With --ssh: shell file on the remote machine that exports CLAUDE_CODE_OAUTH_TOKEN
+REMOTE_ENV = '"$HOME/.config/sms_claude.env"'
 GREETINGS = ('bonjour', 'bonsoir')
 ERROR_REPLY = 'Désolé, je ne peux pas répondre pour le moment.'
 POLITENESS_REPLY = ('La politesse avant tout : commencez par « Bonjour » '
@@ -64,10 +73,10 @@ def build_prompt(text, history):
 	return '\n'.join(lines)
 
 
-def ask_claude(text, history, model):
+def ask_claude(text, history, model, claude='claude', ssh=None):
 	now = datetime.datetime.now()
 	now = '%s %d %s %d, %s' % (DAYS[now.weekday()], now.day, MONTHS[now.month - 1], now.year, now.strftime('%H:%M'))
-	cmd = ['claude', '-p',
+	cmd = [claude, '-p',
 		'--system-prompt', SYSTEM_PROMPT.format(now=now),
 		# Anyone who knows the number can send a prompt, so the only tool is
 		# WebSearch: it runs on Anthropic's side. No WebFetch, which would load
@@ -81,6 +90,16 @@ def ask_claude(text, history, model):
 		'--output-format', 'text']
 	if model:
 		cmd += ['--model', model]
+	if ssh:
+		# A command run by ssh gets neither ~/.local/bin (where the installer
+		# puts claude) in PATH nor the token exported in an interactive shell:
+		# the token is read from REMOTE_ENV if that file exists. Same
+		# empty-directory rule there. ssh joins its arguments into one shell
+		# command line, so each one is quoted.
+		remote = ('PATH="$HOME/.local/bin:$PATH"; [ -f %s ] && . %s; '
+			'd=$(mktemp -d) || exit 1; cd "$d" || exit 1; %s; r=$?; cd /; rmdir "$d"; exit $r'
+			% (REMOTE_ENV, REMOTE_ENV, shlex.join(cmd)))
+		cmd = ['ssh', '-T', '-o', 'BatchMode=yes', ssh, remote]
 	# Empty working directory so no project file or CLAUDE.md is picked up;
 	# the message goes through stdin so it is never parsed as an option.
 	with tempfile.TemporaryDirectory() as cwd:
@@ -92,11 +111,11 @@ def ask_claude(text, history, model):
 
 
 class Responder:
-	def __init__(self, send_sms, allow, model, conversation_timeout):
+	def __init__(self, send_sms, allow, conversation_timeout, ask):
 		self.send_sms = send_sms
 		self.allow = allow
-		self.model = model
 		self.timeout = conversation_timeout  # minutes
+		self.ask = ask  # ask(text, history) -> Claude's answer
 		# Number -> {'last': time of its last answered SMS, 'history': [(message, reply)]}
 		self.conversations = {}
 
@@ -122,7 +141,7 @@ class Responder:
 			return
 		history = conversation['history'] if conversation else []
 		try:
-			answer = fit_sms(ask_claude(text, history, self.model))
+			answer = fit_sms(self.ask(text, history))
 		except (RuntimeError, subprocess.TimeoutExpired, OSError) as e:
 			log('claude error: %s' % e)
 			answer = ''
@@ -137,21 +156,26 @@ class Responder:
 
 def main():
 	parser = argparse.ArgumentParser(description='Answers incoming SMS with Claude Code, in French.')
-	parser.add_argument('port', help='serial port of the module, e.g. /dev/ttyUSB0')
+	parser.add_argument('port', help='serial port of the module: /dev/ttyUSB0 on Linux, /dev/cuaU0 on FreeBSD')
 	parser.add_argument('--allow', action='append', metavar='NUMBER',
 		help='only answer this number (repeatable, e.g. +33612345678); default: any phone number')
 	parser.add_argument('--model', help='Claude model alias or name passed to claude --model')
 	parser.add_argument('--conversation-timeout', type=float, default=30, metavar='MINUTES',
 		help='a conversation ends after this many minutes without SMS from its number (default: 30)')
 	parser.add_argument('--trace', action='store_true', help='log every byte exchanged with the module')
+	parser.add_argument('--claude', default='claude', metavar='PATH',
+		help='claude executable, on the remote machine with --ssh (default: claude, found in PATH)')
+	parser.add_argument('--ssh', metavar='HOST',
+		help='run claude on this Linux machine through ssh (key login; token in ~/.config/sms_claude.env there)')
 	args = parser.parse_args()
 
-	if not os.environ.get('CLAUDE_CODE_OAUTH_TOKEN') and not os.environ.get('ANTHROPIC_API_KEY'):
+	if not args.ssh and not os.environ.get('CLAUDE_CODE_OAUTH_TOKEN') and not os.environ.get('ANTHROPIC_API_KEY'):
 		log('warning: neither CLAUDE_CODE_OAUTH_TOKEN nor ANTHROPIC_API_KEY is set')
 
 	modem = Modem(args.port, args.trace)
 	log('purged %d SMS already in memory' % modem.purge_sms())
-	responder = Responder(modem.send_sms, args.allow, args.model, args.conversation_timeout)
+	responder = Responder(modem.send_sms, args.allow, args.conversation_timeout,
+		lambda text, history: ask_claude(text, history, args.model, args.claude, args.ssh))
 	log('ready on %s, waiting for SMS' % args.port)
 	modem.serve(responder.on_sms)
 
