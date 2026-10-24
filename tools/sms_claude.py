@@ -42,7 +42,11 @@ DAYS = ('lundi', 'mardi', 'mercredi', 'jeudi', 'vendredi', 'samedi', 'dimanche')
 MONTHS = ('janvier', 'février', 'mars', 'avril', 'mai', 'juin', 'juillet', 'août',
 	'septembre', 'octobre', 'novembre', 'décembre')
 
-SYSTEM_PROMPT = """Tu réponds à des SMS. Ta réponse est renvoyée telle quelle par SMS.
+BOT_NAME = 'Robert3000'
+# How the bot introduces itself in the first answer of a conversation
+INTRO_TEXT = 'yo je suis Robert3000 le bot stylé qui repond à toutes tes interogration'
+
+SYSTEM_PROMPT = """Tu t'appelles """ + BOT_NAME + """. Tu réponds à des SMS. Ta réponse est renvoyée telle quelle par SMS.
 - Réponds toujours en français, quelle que soit la langue du message.
 - Elle doit tenir dans un SMS : 150 caractères. Si la question l'exige vraiment, deux SMS
   au plus : 300 caractères au maximum, jamais plus. Texte brut : pas de markdown, pas de
@@ -53,9 +57,9 @@ SYSTEM_PROMPT = """Tu réponds à des SMS. Ta réponse est renvoyée telle quell
 Date et heure actuelles : {now}."""
 # Added to SYSTEM_PROMPT for the first message of a conversation (the greeting)
 INTRO_PROMPT = """
-Ce message ouvre la conversation : présente-toi d'abord en disant que tu es Claude, une IA
-d'Anthropic, et que tu réponds au format SMS (messages courts). S'il contient une question,
-réponds-y ensuite, toujours dans la même limite de longueur."""
+Ce message ouvre la conversation : commence ta réponse exactement par cette phrase, mot pour
+mot, sans la modifier ni la corriger : """ + INTRO_TEXT + """
+S'il contient une question, réponds-y ensuite, toujours dans la même limite de longueur."""
 
 
 def is_greeting(text):
