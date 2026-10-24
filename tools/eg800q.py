@@ -8,6 +8,7 @@ import datetime
 import re
 import subprocess
 import sys
+import threading
 import time
 import unicodedata
 
@@ -155,38 +156,57 @@ class UsbPort:
 		# SET_CONTROL_LINE_STATE with DTR and RTS on, as when a serial port opens
 		self.dev.ctrl_transfer(0x21, 0x22, 0x03, interface)
 		self.buf = b''
+		self.error = None
+		self.cond = threading.Condition()
+		# When a bulk read times out, pyusb drops the bytes it already got, so a
+		# reply arriving at that moment is lost. A reader thread keeps one read
+		# pending with no timeout and fills buf; the methods below only wait on buf.
+		threading.Thread(target=self._reader, daemon=True).start()
 
-	def _fill(self, seconds):
-		try:
-			self.buf += bytes(self.ep_in.read(512, timeout=max(1, int(seconds * 1000))))
-		except self.usb.core.USBTimeoutError:
-			pass
+	def _reader(self):
+		while True:
+			try:
+				data = bytes(self.ep_in.read(512, timeout=0))  # 0: wait forever
+			except self.usb.core.USBError as e:
+				with self.cond:
+					self.error = e
+					self.cond.notify_all()
+				return
+			with self.cond:
+				self.buf += data
+				self.cond.notify_all()
+
+	def _wait(self, ready):
+		# Waits up to TIMEOUT for ready() to be true; the caller holds cond
+		end = time.time() + self.TIMEOUT
+		while not ready() and self.error is None and time.time() < end:
+			self.cond.wait(end - time.time())
+		if self.error is not None and not self.buf:
+			raise ModemError('USB link lost: %s' % self.error)
 
 	@property
 	def in_waiting(self):
-		if not self.buf:
-			self._fill(0.001)
-		return len(self.buf)
+		with self.cond:
+			return len(self.buf)
 
 	def write(self, data):
 		self.ep_out.write(data, timeout=5000)
 
 	def read(self, size=1):
-		if not self.buf:
-			self._fill(self.TIMEOUT)
-		data, self.buf = self.buf[:size], self.buf[size:]
-		return data
+		with self.cond:
+			self._wait(lambda: self.buf)
+			data, self.buf = self.buf[:size], self.buf[size:]
+			return data
 
 	def readline(self):
-		end = time.time() + self.TIMEOUT
-		while b'\n' not in self.buf and time.time() < end:
-			self._fill(end - time.time())
-		if b'\n' in self.buf:
-			line, self.buf = self.buf.split(b'\n', 1)
-			return line + b'\n'
-		# Like pyserial on timeout: whatever arrived, maybe nothing
-		data, self.buf = self.buf, b''
-		return data
+		with self.cond:
+			self._wait(lambda: b'\n' in self.buf)
+			if b'\n' in self.buf:
+				line, self.buf = self.buf.split(b'\n', 1)
+				return line + b'\n'
+			# Like pyserial on timeout: whatever arrived, maybe nothing
+			data, self.buf = self.buf, b''
+			return data
 
 
 def find_ftdi_port():
