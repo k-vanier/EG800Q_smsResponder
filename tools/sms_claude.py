@@ -45,7 +45,7 @@ MONTHS = ('janvier', 'février', 'mars', 'avril', 'mai', 'juin', 'juillet', 'ao�
 BOT_NAME = 'Robert3000'
 # First answer of a conversation, sent by the script itself word for word:
 # alone for a bare greeting, before Claude's answer if the greeting asks something
-INTRO_TEXT = 'yo je suis Robert3000 le bot stylé qui repond à toutes tes interogtation'
+INTRO_TEXT = 'yo je suis Robert3000 le bot stylé qui repond à toutes tes interogations'
 
 SYSTEM_PROMPT = """Tu t'appelles """ + BOT_NAME + """. Tu réponds à des SMS. Ta réponse est renvoyée telle quelle par SMS.
 - Ne salue pas, ne te présente pas, ne demande pas ce que tu peux faire : réponds directement.
