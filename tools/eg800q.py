@@ -211,10 +211,18 @@ class Modem:
 		as read anyway."""
 		messages = []
 		for line in self.command('AT+CMGL="ALL"', 30):
+			# In GSM text mode the module only sends 7-bit bytes (UCS2 text comes
+			# as hex), so a byte above 0x7F means the line was garbled on the UART.
+			# Nothing is handled or deleted then: the next scan reads it again.
+			if any(ord(c) > 0x7F for c in line):
+				raise ModemError('AT+CMGL="ALL" -> garbled reply %r' % line)
 			# +CMGL: 3,"REC UNREAD","+33612345678",,"26/10/24,14:32:10+08"
-			m = re.match(r'\s*\+CMGL: (\d+),"[^"]*","([^"]*)"(?:,[^,]*,"([^"]*)")?', line)
+			m = re.match(r'\s*\+CMGL: (\d+),"(?:REC UNREAD|REC READ)","([^"]*)",[^,]*,'
+				r'"(\d\d/\d\d/\d\d,\d\d:\d\d:\d\d[+-]\d\d)"\s*$', line)
 			if m:
-				messages.append([int(m.group(1)), m.group(2), m.group(3) or '', ''])
+				messages.append([int(m.group(1)), m.group(2), m.group(3), ''])
+			elif '+CMGL:' in line:
+				raise ModemError('AT+CMGL="ALL" -> garbled header %r' % line)
 			elif messages:
 				body = messages[-1][3]
 				messages[-1][3] = (body + ' ' if body else '') + gsm_decode(line)
@@ -226,7 +234,11 @@ class Modem:
 
 	def purge_sms(self):
 		"""Logs then deletes every SMS stored in the module."""
-		messages = self.list_sms()
+		try:
+			messages = self.list_sms()
+		except ModemError as e:
+			log('error: %s; purging without logging the messages' % e)
+			messages = []
 		for index, sender, stamp, text in messages:
 			log('purged SMS %d from %s: %r' % (index, sender, text))
 		# Delete flag 4: all messages, whatever their status; the index is ignored
