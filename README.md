@@ -109,7 +109,7 @@ install -m 444 tools/eg800q.py tools/sms_claude.py /usr/local/libexec/eg800q/
 install -m 555 rc.d/sms_claude /usr/local/etc/rc.d/sms_claude
 sysrc sms_claude_enable=YES
 sysrc sms_claude_user=bsdouille
-sysrc sms_claude_args="--claude /home/bsdouille/.local/bin/claude"
+sysrc sms_claude_args="--claude /usr/local/bin/claude"
 service sms_claude start
 tail -f /var/log/messages | grep sms_claude
 ```
