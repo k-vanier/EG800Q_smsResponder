@@ -23,9 +23,11 @@ def main():
 	parser = argparse.ArgumentParser(description='Answers "heure" SMS with the current time.')
 	parser.add_argument('port', help='usb for the own USB port of the module, or the serial port of the FTDI adapter (/dev/cuaU1, /dev/ttyUSB0, COM18), or auto to find it')
 	parser.add_argument('--trace', action='store_true', help='log every byte exchanged with the module')
+	parser.add_argument('--sms-log', metavar='FILE',
+		help='append one line per SMS received or sent to this file, e.g. /var/log/sms')
 	args = parser.parse_args()
 
-	modem = Modem(args.port, args.trace)
+	modem = Modem(args.port, args.trace, args.sms_log)
 
 	def on_sms(sender, text):
 		if text.lower() not in KEYWORDS or not is_phone_number(sender):

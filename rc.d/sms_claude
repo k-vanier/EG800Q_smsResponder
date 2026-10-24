@@ -7,14 +7,16 @@
 # Répond par Claude aux SMS reçus par le module EG800Q-EU, dès le démarrage.
 # Réglages dans /etc/rc.conf (avec sysrc) :
 #   sms_claude_enable="YES"
-#   sms_claude_user="bsdouille"      utilisateur pour qui claude fonctionne déjà,
-#                                    membre du groupe dialer
+#   sms_claude_user="monuser"        obligatoire : utilisateur (pas root) pour qui claude
+#                                    fonctionne déjà, membre du groupe dialer
 #   sms_claude_port="usb"            port USB du module (pyusb, règle devd/eg800q.conf),
 #                                    ou "auto" pour l'adaptateur FTDI, ou /dev/cuaU0
 #   sms_claude_args="--claude /usr/local/bin/claude"
 #                                    options de sms_claude.py (chemin de claude, --allow...)
 #   sms_claude_dir="/usr/local/libexec/eg800q"     dossier de sms_claude.py et eg800q.py
 #   sms_claude_python="/usr/local/bin/python3"
+#   sms_claude_sms_log="/var/log/sms"   une ligne par SMS reçu (IN) ou envoyé (OUT),
+#                                    root:dialer 660 ; vide pour ne pas tracer les SMS
 #   sms_claude_env_file="/usr/local/etc/sms_claude.env"
 #       facultatif : CLAUDE_CODE_OAUTH_TOKEN=... (root:wheel, chmod 600), si claude
 #       n'est pas déjà connecté pour cet utilisateur
@@ -30,11 +32,12 @@ rcvar="sms_claude_enable"
 load_rc_config $name
 
 : ${sms_claude_enable:="NO"}
-: ${sms_claude_user:="bsdouille"}
+: ${sms_claude_user:=""}
 : ${sms_claude_port:="usb"}
 : ${sms_claude_args:=""}
 : ${sms_claude_dir:="/usr/local/libexec/eg800q"}
 : ${sms_claude_python:="/usr/local/bin/python3"}
+: ${sms_claude_sms_log="/var/log/sms"}
 
 # claude keeps its login and settings in the home directory of the user it
 # runs as: HOME must point there, not to root's.
@@ -45,15 +48,27 @@ pidfile="/var/run/${name}.pid"
 command="/usr/sbin/daemon"
 # No daemon -u: rc.subr already starts daemon as ${sms_claude_user} (su -m),
 # because that variable is set, and a non-root daemon cannot switch user.
-command_args="-P ${pidfile} -r -R 5 -S -T ${name} ${sms_claude_python} ${sms_claude_dir}/sms_claude.py ${sms_claude_port} ${sms_claude_args}"
+command_args="-P ${pidfile} -r -R 5 -S -T ${name} ${sms_claude_python} ${sms_claude_dir}/sms_claude.py ${sms_claude_port} ${sms_claude_sms_log:+--sms-log ${sms_claude_sms_log}} ${sms_claude_args}"
 required_files="${sms_claude_dir}/sms_claude.py ${sms_claude_dir}/eg800q.py"
 start_precmd="${name}_prestart"
 
 # daemon runs as the user and writes its pidfile itself: create it for the
-# user, since only root can write in /var/run.
+# user, since only root can write in /var/run. The SMS log in /var/log is
+# created once, kept across restarts, and writable by the dialer group, which
+# the user belongs to (newsyslog/sms.conf recreates it the same way).
 sms_claude_prestart()
 {
+	case "${sms_claude_user}" in
+	''|root)
+		err 1 "set sms_claude_user to the user claude works for (not root): sysrc sms_claude_user=..."
+		;;
+	esac
 	install -o "${sms_claude_user}" -m 644 /dev/null "${pidfile}"
+	if [ -n "${sms_claude_sms_log}" ]; then
+		[ -e "${sms_claude_sms_log}" ] || install -m 660 -g dialer /dev/null "${sms_claude_sms_log}"
+		chown root:dialer "${sms_claude_sms_log}"
+		chmod 660 "${sms_claude_sms_log}"
+	fi
 }
 
 run_rc_command "$1"

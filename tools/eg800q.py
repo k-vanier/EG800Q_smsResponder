@@ -16,6 +16,8 @@ import serial
 import serial.tools.list_ports
 
 SCAN_PERIOD = 5  # seconds between two checks for unread SMS
+CMTI_DELAY = 1  # seconds between +CMTI (new SMS) and reading the memory
+EMPTY_SCANS = 3  # scans that must find an SMS with no text before it counts as empty
 SMS_LENGTH = 160  # GSM 7-bit characters in a single SMS
 MAX_TRIES = 3  # attempts to send a reply before the SMS is deleted anyway
 COMMAND_TIMEOUT = 20  # seconds; the module can take more than 5 s right after sending an SMS
@@ -236,7 +238,8 @@ def is_phone_number(sender):
 
 
 class Modem:
-	def __init__(self, port, trace=False):
+	def __init__(self, port, trace=False, sms_log=None):
+		self.sms_log = sms_log  # file that gets one line per SMS received or sent
 		if port == 'auto':
 			port = find_ftdi_port()
 			log('FTDI adapter found on %s' % port)
@@ -334,7 +337,21 @@ class Modem:
 				raise ModemError('%s -> no prompt' % cmd)
 			buf += self._read()
 		self._write(gsm_encode(text) + b'\x1a')
-		return self._wait_result(cmd, SEND_TIMEOUT, done='+CMGS:')
+		lines = self._wait_result(cmd, SEND_TIMEOUT, done='+CMGS:')
+		self.log_sms('OUT', number, text)
+		return lines
+
+	def log_sms(self, direction, number, text):
+		# 2026-10-24 17:40:12 IN  +33612345678 Bonjour
+		if not self.sms_log:
+			return
+		line = '%s %-3s %s %s\n' % (datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+			direction, number, ' '.join(text.split()))
+		try:
+			with open(self.sms_log, 'a', encoding='utf-8') as f:
+				f.write(line)
+		except OSError as e:
+			log('error: cannot write %s: %s' % (self.sms_log, e))
 
 	def list_sms(self):
 		"""Returns [(index, sender, stamp, text)] for every SMS stored in the
@@ -401,7 +418,8 @@ class Modem:
 		logged every BATTERY_PERIOD seconds."""
 		tries = {}
 		handled = set()  # (index, sender, stamp) handled but maybe not deleted
-		last_scan = 0
+		empty = {}  # (index, sender, stamp) -> scans that found it with no text
+		next_scan = 0
 		last_battery = 0
 		while True:
 			if time.time() - last_battery > BATTERY_PERIOD:
@@ -410,9 +428,13 @@ class Modem:
 					log('battery: %.2f V, %s' % self.battery())
 				except ModemError as e:
 					log('error: %s' % e)
-			if self.new_sms or time.time() - last_scan > SCAN_PERIOD:
+			if self.new_sms:
+				# +CMTI comes while the module is still storing the SMS: listed
+				# right away, it can show up with no text yet
 				self.new_sms = False
-				last_scan = time.time()
+				next_scan = min(next_scan, time.time() + CMTI_DELAY)
+			if time.time() >= next_scan:
+				next_scan = time.time() + SCAN_PERIOD
 				try:
 					messages = self.list_sms()
 				except ModemError as e:
@@ -420,13 +442,22 @@ class Modem:
 					messages = None
 				if messages is not None:
 					# Forget the ones whose deletion worked after all
-					handled &= {(index, sender, stamp) for index, sender, stamp, text in messages}
+					present = {(index, sender, stamp) for index, sender, stamp, text in messages}
+					handled &= present
+					empty = {key: n for key, n in empty.items() if key in present}
 				for index, sender, stamp, text in messages or []:
 					key = (index, sender, stamp)
+					if not text and key not in handled and empty.get(key, 0) < EMPTY_SCANS - 1:
+						# Never handle (and delete) an SMS read before it was complete
+						empty[key] = empty.get(key, 0) + 1
+						log('SMS %d from %s has no text yet, reading it again' % (index, sender))
+						continue
 					if key in handled:
 						log('SMS %d already handled, deleting it again' % index)
 					else:
 						log('SMS %d from %s: %r' % (index, sender, text))
+						if key not in tries:  # once, not again on each send retry
+							self.log_sms('IN', sender, text)
 						try:
 							on_sms(sender, text)
 						except ModemError as e:

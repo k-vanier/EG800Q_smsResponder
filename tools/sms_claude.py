@@ -14,7 +14,7 @@
 #
 # Usage: python3 sms_claude.py PORT [--allow +336...] [--model NAME]
 #                              [--conversation-timeout MINUTES]
-#                              [--claude PATH] [--trace]
+#                              [--claude PATH] [--sms-log FILE] [--trace]
 #   PORT: usb (module's USB port), auto (FTDI adapter), /dev/cuaU0, /dev/ttyUSB0
 # Auth: export CLAUDE_CODE_OAUTH_TOKEN=... (from "claude setup-token")
 #       or ANTHROPIC_API_KEY=...
@@ -154,6 +154,8 @@ def main():
 	parser.add_argument('--conversation-timeout', type=float, default=30, metavar='MINUTES',
 		help='a conversation ends after this many minutes without SMS from its number (default: 30)')
 	parser.add_argument('--trace', action='store_true', help='log every byte exchanged with the module')
+	parser.add_argument('--sms-log', metavar='FILE',
+		help='append one line per SMS received or sent to this file, e.g. /var/log/sms')
 	parser.add_argument('--claude', default='claude', metavar='PATH',
 		help='claude executable (default: claude, found in PATH)')
 	args = parser.parse_args()
@@ -161,7 +163,7 @@ def main():
 	if not os.environ.get('CLAUDE_CODE_OAUTH_TOKEN') and not os.environ.get('ANTHROPIC_API_KEY'):
 		log('warning: neither CLAUDE_CODE_OAUTH_TOKEN nor ANTHROPIC_API_KEY is set')
 
-	modem = Modem(args.port, args.trace)
+	modem = Modem(args.port, args.trace, args.sms_log)
 	log('purged %d SMS already in memory' % modem.purge_sms())
 	responder = Responder(modem.send_sms, args.allow, args.conversation_timeout,
 		lambda text, history: ask_claude(text, history, args.model, args.claude))
