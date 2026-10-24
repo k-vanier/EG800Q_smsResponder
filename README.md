@@ -175,7 +175,7 @@ The service runs `daemon(8)`, which restarts the script 5 s after any exit (modu
 
 - A conversation is all the SMS from one number. It ends after 30 minutes without SMS from it, or when the script restarts.
 - Its first SMS must start with "Bonjour" or "Bonsoir" (any case, accents ignored). Otherwise the sender gets `La politesse avant tout : commencez par « Bonjour » et je répondrai avec plaisir à votre message.`, Claude is not called, and the conversation does not start.
-- The bot is called Robert3000. The script itself answers that first SMS with `yo je suis Robert3000 le bot stylé qui repond à toutes tes interogration`, word for word: alone for a bare greeting ("Bonjour !", Claude is not called), followed by Claude's answer if the greeting asks something ("Bonjour, quelle heure est-il ?"). The name and the sentence are `BOT_NAME` and `INTRO_TEXT` at the top of `tools/sms_claude.py`.
+- The bot is called Robert3000. The script itself answers that first SMS with `yo je suis Robert3000 le bot stylé qui repond à toutes tes interogtation`, word for word: alone for a bare greeting ("Bonjour !", Claude is not called), followed by Claude's answer if the greeting asks something ("Bonjour, quelle heure est-il ?"). The name and the sentence are `BOT_NAME` and `INTRO_TEXT` at the top of `tools/sms_claude.py`.
 - Within a conversation, Claude gets the last 10 exchanges with that number, so follow-up questions keep their context.
 - Claude answers directly, without greeting, introducing itself or asking how it can help, always in French, in plain text, without links. It aims at 150 characters (one SMS) and is told never to go beyond 300 (two SMS).
 
