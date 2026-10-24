@@ -99,6 +99,7 @@ pkg install python3 py312-pyserial py312-pyusb
 **USB permissions.** A raw USB device belongs to root. `devd/eg800q.conf` gives the module to the `dialer` group each time it is plugged in (it matches `2c7c:6007` only):
 
 ```
+mkdir -p /usr/local/etc/devd
 install -m 444 devd/eg800q.conf /usr/local/etc/devd/
 service devd restart
 ```
