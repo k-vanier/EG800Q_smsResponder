@@ -41,11 +41,18 @@ def ucs2_decode(text):
 	A phone sends an SMS in UCS2 when it holds a character missing from the GSM
 	alphabet ("ç", "’", an emoji...), and with AT+CSCS="GSM" the module prints
 	it as hex: "0045006E" is "En". Plain text made of hex digits ("CAFE1234")
-	is kept: decoded, most of its characters must be Latin (high byte 00)."""
+	is kept: decoded, most of its characters must be Latin (high byte 00) or
+	emoji (surrogate pair D800-DBFF then DC00-DFFF)."""
 	if len(text) < 8 or len(text) % 4 or not re.fullmatch(r'[0-9A-Fa-f]+', text):
 		return text
-	units = [text[i:i + 4] for i in range(0, len(text), 4)]
-	if sum(u.startswith('00') for u in units) * 2 < len(units):
+	units = [int(text[i:i + 4], 16) for i in range(0, len(text), 4)]
+	likely = 0
+	for i, u in enumerate(units):
+		pair_start = 0xD800 <= u <= 0xDBFF and i + 1 < len(units) and 0xDC00 <= units[i + 1] <= 0xDFFF
+		pair_end = 0xDC00 <= u <= 0xDFFF and i > 0 and 0xD800 <= units[i - 1] <= 0xDBFF
+		if u < 0x100 or pair_start or pair_end:
+			likely += 1
+	if likely * 2 < len(units):
 		return text
 	try:
 		decoded = bytes.fromhex(text).decode('utf-16-be')
