@@ -72,7 +72,7 @@ python3 tools/sms_claude.py /dev/ttyUSB0 --allow +33612345678
 - `--model` is passed to `claude --model` (`sonnet`, `haiku`…). Default: the CLI's default model.
 - The answer is converted to the GSM SMS alphabet: French accents such as é, è, à and ù are kept, `ç` becomes `c`, `€` becomes `EUR`, and other characters become `?`. Answers longer than 160 characters are cut and end with `...`.
 - If Claude fails or takes longer than 2 minutes, the sender gets `Desole, je ne peux pas repondre pour le moment.`
-- A question with a character missing from the GSM alphabet (`ç`, `’`, an emoji…) is sent by the phone in UCS2, and the module prints it as hex (`0045006E…`). The script decodes it back to text.
+- A question with a character missing from the GSM alphabet (`ç`, `’`, an emoji…) is sent by the phone in UCS2, and the module prints it as hex (`0045006E…`). The script decodes it back to text, emoji included (😀, ❤️, ✅, flags, skin tones, 👨‍👩‍👧). Two limits: a single emoji alone without variation selector (`2764`, ❤) cannot be told from a number and stays as hex, and replies cannot contain emoji, since they are sent in the GSM alphabet.
 - A question longer than 160 characters arrives as several SMS, and each part is answered separately.
 
 ## Tested module

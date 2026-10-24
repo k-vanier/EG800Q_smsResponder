@@ -35,22 +35,37 @@ def gsm_decode(text):
 	return ''.join(GSM[ord(c)] if ord(c) < 128 else c for c in text)
 
 
+# UTF-16 code units likely in an SMS: Latin, Greek and Cyrillic letters, then
+# punctuation (’ …), currency (€), the zero width joiner 200D and keycap 20E3,
+# symbols, arrows, dingbats and the other emoji of the basic plane (❤ ☀ ✅ ⭐),
+# CJK emoji (〰 〽 ㊗ ㊙) and the variation selectors (FE0F after ❤ gives ❤️).
+# Emoji outside the basic plane (😀, flags, skin tones) are surrogate pairs.
+LIKELY_UNITS = ((0x0000, 0x052F), (0x2000, 0x2BFF), (0x3030, 0x3030), (0x303D, 0x303D),
+	(0x3297, 0x3297), (0x3299, 0x3299), (0xFE00, 0xFE0F))
+
+
 def ucs2_decode(text):
 	"""Decodes an SMS body the module shows as UCS2 hex, else returns it unchanged.
 
 	A phone sends an SMS in UCS2 when it holds a character missing from the GSM
 	alphabet ("ç", "’", an emoji...), and with AT+CSCS="GSM" the module prints
 	it as hex: "0045006E" is "En". Plain text made of hex digits ("CAFE1234")
-	is kept: decoded, most of its characters must be Latin (high byte 00) or
-	emoji (surrogate pair D800-DBFF then DC00-DFFF)."""
+	is kept: decoded, most of its characters must be in LIKELY_UNITS or
+	surrogate pairs. Digits only ("20262027") must hold a 00xx character or
+	be emoji symbols only (2190-2BFF: "27052705" is ✅✅). A single
+	basic-plane emoji alone ("2764" for ❤) is too short to tell from a
+	number and stays as hex."""
 	if len(text) < 8 or len(text) % 4 or not re.fullmatch(r'[0-9A-Fa-f]+', text):
 		return text
 	units = [int(text[i:i + 4], 16) for i in range(0, len(text), 4)]
+	if text.isdigit() and not any(u < 0x100 for u in units) \
+			and not all(0x2190 <= u <= 0x2BFF for u in units):
+		return text
 	likely = 0
 	for i, u in enumerate(units):
 		pair_start = 0xD800 <= u <= 0xDBFF and i + 1 < len(units) and 0xDC00 <= units[i + 1] <= 0xDFFF
 		pair_end = 0xDC00 <= u <= 0xDFFF and i > 0 and 0xD800 <= units[i - 1] <= 0xDBFF
-		if u < 0x100 or pair_start or pair_end:
+		if pair_start or pair_end or any(lo <= u <= hi for lo, hi in LIKELY_UNITS):
 			likely += 1
 	if likely * 2 < len(units):
 		return text
@@ -58,7 +73,11 @@ def ucs2_decode(text):
 		decoded = bytes.fromhex(text).decode('utf-16-be')
 	except UnicodeDecodeError:
 		return text
-	return decoded if all(c.isprintable() or c.isspace() for c in decoded) else text
+	# Control characters mean it was not text; format characters are fine
+	# (zero width joiner in 👨‍👩‍👧, tags in the Scotland flag)
+	if any(unicodedata.category(c) == 'Cc' and not c.isspace() for c in decoded):
+		return text
+	return decoded
 
 
 def gsm_encode(text):
