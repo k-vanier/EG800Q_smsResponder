@@ -49,7 +49,8 @@ Both servers (this one and `sms_claude.py`) work the same way, in `tools/eg800q.
 - Every 5 seconds the server lists **every SMS stored** in the module, read or not. For each one it reads it, answers if needed, then **deletes it**, even when it was not answered. The module's memory (`ME`) holds only **10 messages**, and new SMS stop arriving once it is full.
 - If the reply cannot be sent, the SMS is kept and tried again, at most 3 times, then deleted.
 - At startup, `sms_time_server.py` handles messages already in memory like new ones, so they may get an answer. `sms_claude.py` instead deletes them all without answering (`AT+CMGD=0,4`), after printing each one in the log.
-- Right after the module transmits an SMS, bytes it sends on the UART sometimes arrive garbled (`+CMGS: 32` then `þ` instead of `OK`). The likely cause is the current peak of the radio on a weak power supply, or a UART voltage mismatch with the USB-serial adapter. The server copes with it: `+CMGS: n` alone counts as sent (it waits 5 s for the OK, not 120 s), and an SMS already answered whose deletion failed is only deleted again, never answered twice.
+- Right after the module transmits an SMS, bytes it sends on the UART sometimes arrive garbled (`+CMGS: 32` then `
+þ` instead of `OK`). The likely cause is the current peak of the radio on a weak power supply, or a UART voltage mismatch with the USB-serial adapter. The server copes with it: `+CMGS: n` alone counts as sent (it waits 5 s for the OK, not 120 s), and an SMS already answered whose deletion failed is only deleted again, never answered twice.
 - `--trace` logs every byte written to and read from the module, to see what it really answers.
 - The server does not rely on `+CMTI` alone, because the module sends it to the USB AT port by default (`AT+QCFG="urc/port"` is `usbat`), not to the UART.
 
@@ -75,7 +76,8 @@ python3 tools/sms_claude.py /dev/ttyUSB0 --allow +33612345678
 
 - `claude setup-token` creates a long-lived token from a Claude subscription. `ANTHROPIC_API_KEY` works too.
 - The user running the script must be allowed to open the serial port (group `dialout` on Debian/Ubuntu).
-- Claude runs with **no tools** (`--tools ""`, no MCP), in an empty temporary directory, and the question goes through stdin. Someone who knows the number can only get a text answer, never run anything on the machine.
+- Claude has **one tool only: WebSearch** (`--tools "WebSearch"`, no MCP), for weather, news or schedules. The search runs on Anthropic's side. WebFetch is left out on purpose: it would load pages from this machine, so an SMS could make it read the local network (the NAS admin page, other devices). Claude runs in an empty temporary directory and the question goes through stdin: someone who knows the number can only get a text answer, never run anything on the machine.
+- A search makes the answer slower (often 10 to 30 s) and uses more of your Claude quota. Claude gets up to 5 turns (`--max-turns 5`) to search then answer.
 - `--allow` (repeatable) restricts answers to some numbers. Without it, every phone number gets an answer, and every SMS uses your Claude quota.
 - `--model` is passed to `claude --model` (`sonnet`, `haiku`…). Default: the CLI's default model.
 - The answer is converted to the GSM SMS alphabet: French accents such as é, è, à and ù are kept, `ç` becomes `c`, `€` becomes `EUR`, and other characters become `?`. Answers longer than 160 characters are cut and end with `...`.

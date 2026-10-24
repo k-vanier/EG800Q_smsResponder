@@ -29,6 +29,7 @@ import unicodedata
 from eg800q import Modem, fit_sms, is_phone_number, log
 
 CLAUDE_TIMEOUT = 120  # seconds
+MAX_TURNS = 5  # enough for a few web searches before the answer
 MAX_HISTORY = 10  # previous exchanges of the conversation given to Claude
 GREETINGS = ('bonjour', 'bonsoir')
 ERROR_REPLY = 'Désolé, je ne peux pas répondre pour le moment.'
@@ -41,8 +42,9 @@ MONTHS = ('janvier', 'février', 'mars', 'avril', 'mai', 'juin', 'juillet', 'ao�
 SYSTEM_PROMPT = """Tu réponds à des SMS. Ta réponse est renvoyée telle quelle dans un seul SMS.
 - Réponds toujours en français, quelle que soit la langue du message.
 - 150 caractères au maximum, en texte brut : pas de markdown, pas de liste, pas d'émoji.
-- Une ou deux phrases.
-- Tu n'as ni outils ni accès à internet. Si tu ne sais pas, dis-le brièvement.
+- Une ou deux phrases, sans lien internet.
+- Tu peux faire une recherche sur internet quand la question porte sur l'actualité, la météo,
+  des horaires ou d'autres faits récents. Tu ne peux rien faire d'autre. Si tu ne sais pas, dis-le brièvement.
 - Si la conversation a déjà commencé, ses échanges précédents sont donnés avant le nouveau message.
 Date et heure actuelles : {now}."""
 
@@ -67,12 +69,15 @@ def ask_claude(text, history, model):
 	now = '%s %d %s %d, %s' % (DAYS[now.weekday()], now.day, MONTHS[now.month - 1], now.year, now.strftime('%H:%M'))
 	cmd = ['claude', '-p',
 		'--system-prompt', SYSTEM_PROMPT.format(now=now),
-		# No tools at all: anyone who knows the number can send a prompt
-		'--tools', '',
+		# Anyone who knows the number can send a prompt, so the only tool is
+		# WebSearch: it runs on Anthropic's side. No WebFetch, which would load
+		# pages from this machine and could reach the local network.
+		'--tools', 'WebSearch',
+		'--allowedTools', 'WebSearch',
 		'--disallowedTools', 'mcp__*',
 		'--strict-mcp-config',
 		'--no-session-persistence',
-		'--max-turns', '1',
+		'--max-turns', str(MAX_TURNS),
 		'--output-format', 'text']
 	if model:
 		cmd += ['--model', model]
