@@ -111,13 +111,31 @@ def gsm_encode(text):
 	return bytes(out)
 
 
-def fit_sms(text):
+def fit_sms(text, length=SMS_LENGTH):
 	text = ' '.join(text.split())
-	if len(gsm_encode(text)) <= SMS_LENGTH:
+	if len(gsm_encode(text)) <= length:
 		return text
-	while len(gsm_encode(text + '...')) > SMS_LENGTH:
+	while len(gsm_encode(text + '...')) > length:
 		text = text[:-1]
 	return text.rstrip() + '...'
+
+
+def split_sms(text):
+	"""Returns the text as one SMS, or as two numbered "1/2 ..." and "2/2 ..."
+	cut between words, the second one ending with ... if the text is longer."""
+	text = ' '.join(text.split())
+	if len(gsm_encode(text)) <= SMS_LENGTH:
+		return [text]
+	room = SMS_LENGTH - len('1/2 ')
+	first = ''
+	for word in text.split(' '):
+		if len(gsm_encode((first + ' ' + word).strip())) > room:
+			break
+		first = (first + ' ' + word).strip()
+	if not first:  # a single word longer than an SMS
+		first = fit_sms(text, room)[:-3]
+	rest = text[len(first):].strip()
+	return ['1/2 ' + first, '2/2 ' + fit_sms(rest, room)]
 
 
 def log(msg):
