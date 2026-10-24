@@ -14,6 +14,7 @@ SMS_LENGTH = 160  # GSM 7-bit characters in a single SMS
 MAX_TRIES = 3  # attempts to send a reply before the SMS is deleted anyway
 COMMAND_TIMEOUT = 20  # seconds; the module can take more than 5 s right after sending an SMS
 SEND_TIMEOUT = 120  # seconds; Quectel gives 120 s as the maximum response time of AT+CMGS
+DONE_GRACE = 5  # seconds to wait for OK once a reply already proves success
 
 # GSM 03.38 basic character set: the module sends and expects these codes
 # in text mode with AT+CSCS="GSM" (for example 0x04 is "è").
@@ -145,8 +146,14 @@ class Modem:
 			return True
 		return False
 
-	def _wait_result(self, cmd, timeout):
+	def _wait_result(self, cmd, timeout, done=None):
+		"""Returns the lines the module sends before OK.
+
+		done is a reply prefix that already proves success ("+CMGS:" for a sent
+		SMS): once seen, a lost or garbled OK only costs DONE_GRACE seconds.
+		Bytes do get garbled on the UART right after the module transmits."""
 		lines = []
+		done_seen = False
 		end = time.time() + timeout
 		while time.time() < end:
 			line = self._readline()
@@ -159,7 +166,13 @@ class Modem:
 				return lines
 			if 'ERROR' in status:
 				raise ModemError('%s -> %s' % (cmd, status))
+			if done and status.startswith(done) and not done_seen:
+				done_seen = True
+				end = min(end, time.time() + DONE_GRACE)
 			lines.append(line)
+		if done_seen:
+			log('%s: no OK after %s, taken as done' % (cmd, done))
+			return lines
 		raise ModemError('%s -> timeout' % cmd)
 
 	def _flush(self):
@@ -187,10 +200,11 @@ class Modem:
 				raise ModemError('%s -> no prompt' % cmd)
 			buf += self._read()
 		self._write(gsm_encode(text) + b'\x1a')
-		return self._wait_result(cmd, SEND_TIMEOUT)
+		return self._wait_result(cmd, SEND_TIMEOUT, done='+CMGS:')
 
 	def list_sms(self):
-		"""Returns [(index, sender, text)] for every SMS stored in the module.
+		"""Returns [(index, sender, stamp, text)] for every SMS stored in the
+		module; stamp is the time the network gives, "26/10/24,14:32:10+08".
 
 		Read and unread messages alike: AT+CMGL="REC UNREAD" always returns an
 		empty list on firmware EG800QEULCR01A07M04, and listing marks messages
@@ -198,13 +212,14 @@ class Modem:
 		messages = []
 		for line in self.command('AT+CMGL="ALL"', 30):
 			# +CMGL: 3,"REC UNREAD","+33612345678",,"26/10/24,14:32:10+08"
-			m = re.match(r'\s*\+CMGL: (\d+),"[^"]*","([^"]*)"', line)
+			m = re.match(r'\s*\+CMGL: (\d+),"[^"]*","([^"]*)"(?:,[^,]*,"([^"]*)")?', line)
 			if m:
-				messages.append([int(m.group(1)), m.group(2), ''])
+				messages.append([int(m.group(1)), m.group(2), m.group(3) or '', ''])
 			elif messages:
-				body = messages[-1][2]
-				messages[-1][2] = (body + ' ' if body else '') + gsm_decode(line)
-		return [(index, sender, ucs2_decode(text.strip()).strip()) for index, sender, text in messages]
+				body = messages[-1][3]
+				messages[-1][3] = (body + ' ' if body else '') + gsm_decode(line)
+		return [(index, sender, stamp, ucs2_decode(text.strip()).strip())
+			for index, sender, stamp, text in messages]
 
 	def delete_sms(self, index):
 		self.command('AT+CMGD=%d' % index)
@@ -212,7 +227,7 @@ class Modem:
 	def purge_sms(self):
 		"""Logs then deletes every SMS stored in the module."""
 		messages = self.list_sms()
-		for index, sender, text in messages:
+		for index, sender, stamp, text in messages:
 			log('purged SMS %d from %s: %r' % (index, sender, text))
 		# Delete flag 4: all messages, whatever their status; the index is ignored
 		self.command('AT+CMGD=0,4', 30)
@@ -223,11 +238,13 @@ class Modem:
 		then deletes the SMS, so the 10-message memory never fills up.
 
 		An SMS is kept for another try only if on_sms raises ModemError (the
-		reply could not be sent), at most MAX_TRIES times.
+		reply could not be sent), at most MAX_TRIES times. An SMS already handled
+		whose deletion failed is only deleted again, never handled twice.
 
 		+CMTI only reaches the port set by AT+QCFG="urc/port" (USB by default),
 		so the memory is also listed every few seconds."""
 		tries = {}
+		handled = set()  # (index, sender, stamp) handled but maybe not deleted
 		last_scan = 0
 		while True:
 			if self.new_sms or time.time() - last_scan > SCAN_PERIOD:
@@ -237,19 +254,28 @@ class Modem:
 					messages = self.list_sms()
 				except ModemError as e:
 					log('error: %s' % e)
-					messages = []
-				for index, sender, text in messages:
-					log('SMS %d from %s: %r' % (index, sender, text))
-					try:
-						on_sms(sender, text)
-					except ModemError as e:
-						tries[index] = tries.get(index, 0) + 1
-						log('error: %s (try %d/%d)' % (e, tries[index], MAX_TRIES))
-						if tries[index] < MAX_TRIES:
-							continue
-					tries.pop(index, None)
+					messages = None
+				if messages is not None:
+					# Forget the ones whose deletion worked after all
+					handled &= {(index, sender, stamp) for index, sender, stamp, text in messages}
+				for index, sender, stamp, text in messages or []:
+					key = (index, sender, stamp)
+					if key in handled:
+						log('SMS %d already handled, deleting it again' % index)
+					else:
+						log('SMS %d from %s: %r' % (index, sender, text))
+						try:
+							on_sms(sender, text)
+						except ModemError as e:
+							tries[key] = tries.get(key, 0) + 1
+							log('error: %s (try %d/%d)' % (e, tries[key], MAX_TRIES))
+							if tries[key] < MAX_TRIES:
+								continue
+						tries.pop(key, None)
+						handled.add(key)
 					try:
 						self.delete_sms(index)
+						handled.discard(key)
 					except ModemError as e:
 						log('error: %s' % e)
 			line = self._readline().strip()

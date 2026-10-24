@@ -49,6 +49,7 @@ Both servers (this one and `sms_claude.py`) work the same way, in `tools/eg800q.
 - Every 5 seconds the server lists **every SMS stored** in the module, read or not. For each one it reads it, answers if needed, then **deletes it**, even when it was not answered. The module's memory (`ME`) holds only **10 messages**, and new SMS stop arriving once it is full.
 - If the reply cannot be sent, the SMS is kept and tried again, at most 3 times, then deleted.
 - At startup, `sms_time_server.py` handles messages already in memory like new ones, so they may get an answer. `sms_claude.py` instead deletes them all without answering (`AT+CMGD=0,4`), after printing each one in the log.
+- Right after the module transmits an SMS, bytes it sends on the UART sometimes arrive garbled (`+CMGS: 32` then `þ` instead of `OK`). The likely cause is the current peak of the radio on a weak power supply, or a UART voltage mismatch with the USB-serial adapter. The server copes with it: `+CMGS: n` alone counts as sent (it waits 5 s for the OK, not 120 s), and an SMS already answered whose deletion failed is only deleted again, never answered twice.
 - `--trace` logs every byte written to and read from the module, to see what it really answers.
 - The server does not rely on `+CMTI` alone, because the module sends it to the USB AT port by default (`AT+QCFG="urc/port"` is `usbat`), not to the UART.
 
