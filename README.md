@@ -1,6 +1,6 @@
 # EG800Q-EU
 
-Tests and tools for the **Quectel EG800Q-EU**, an LTE Cat 1 bis module for Europe. It is the EU-band candidate to replace the EC800M-CNLE used in [ZX980](../ZX980).
+Tests and tools for the **Quectel EG800Q-EU**, an LTE Cat 1 bis module for Europe.
 
 ## Module
 
@@ -12,10 +12,7 @@ Tests and tools for the **Quectel EG800Q-EU**, an LTE Cat 1 bis module for Europ
 | LTE FDD bands | B1 / B3 / B5 / B7 / B8 / B20 / B28 |
 | GNSS | None built in |
 
-To check before reusing the ZX980 code:
-
-- **Pinout:** is the module pin-compatible with the EC800M on the ZX908 board? Check Quectel's *Hardware Design* document.
-- **QuecPython:** is there a QuecPython firmware for the EG800Q-EU, and does it include `sms`, `gnss` and `wifiScan`? The EC800M uses a different chipset, so the ZX980 firmware cannot be assumed to run.
+Still to check: is there a QuecPython firmware for the EG800Q-EU? The standard firmware is driven by AT commands only.
 
 ## Files
 
