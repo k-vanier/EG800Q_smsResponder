@@ -91,8 +91,10 @@ class Modem:
 			self.command(cmd)
 
 	def _readline(self):
-		# latin-1 keeps the GSM codes of SMS text as they are
-		return self.ser.readline().decode('latin-1').strip()
+		# latin-1 keeps the GSM codes of SMS text as they are. Only the line end
+		# is removed: strip() would also drop GSM letters whose codes Python sees
+		# as whitespace, such as 0x09 "Ç" or 0x1F "É".
+		return self.ser.readline().decode('latin-1').rstrip('\r\n')
 
 	def _urc(self, line):
 		# +CMTI: "ME",3 -> new SMS stored at index 3
