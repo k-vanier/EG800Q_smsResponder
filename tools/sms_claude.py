@@ -29,7 +29,7 @@ import tempfile
 import time
 import unicodedata
 
-from eg800q import Modem, fit_sms, is_phone_number, log
+from eg800q import Modem, fit_sms, is_phone_number, log, split_sms
 
 CLAUDE_TIMEOUT = 120  # seconds
 MAX_TURNS = 5  # enough for a few web searches before the answer
@@ -42,10 +42,11 @@ DAYS = ('lundi', 'mardi', 'mercredi', 'jeudi', 'vendredi', 'samedi', 'dimanche')
 MONTHS = ('janvier', 'février', 'mars', 'avril', 'mai', 'juin', 'juillet', 'août',
 	'septembre', 'octobre', 'novembre', 'décembre')
 
-SYSTEM_PROMPT = """Tu réponds à des SMS. Ta réponse est renvoyée telle quelle dans un seul SMS.
+SYSTEM_PROMPT = """Tu réponds à des SMS. Ta réponse est renvoyée telle quelle par SMS.
 - Réponds toujours en français, quelle que soit la langue du message.
-- 150 caractères au maximum, en texte brut : pas de markdown, pas de liste, pas d'émoji.
-- Une ou deux phrases, sans lien internet.
+- Elle doit tenir dans un SMS : 150 caractères. Si la question l'exige vraiment, deux SMS
+  au plus : 300 caractères au maximum, jamais plus. Texte brut : pas de markdown, pas de
+  liste, pas d'émoji, pas de lien internet.
 - Tu peux faire une recherche sur internet quand la question porte sur l'actualité, la météo,
   des horaires ou d'autres faits récents. Tu ne peux rien faire d'autre. Si tu ne sais pas, dis-le brièvement.
 - Si la conversation a déjà commencé, ses échanges précédents sont donnés avant le nouveau message.
@@ -54,7 +55,7 @@ Date et heure actuelles : {now}."""
 INTRO_PROMPT = """
 Ce message ouvre la conversation : présente-toi d'abord en disant que tu es Claude, une IA
 d'Anthropic, et que tu réponds au format SMS (messages courts). S'il contient une question,
-réponds-y ensuite, toujours dans les 150 caractères."""
+réponds-y ensuite, toujours dans la même limite de longueur."""
 
 
 def is_greeting(text):
@@ -132,11 +133,13 @@ class Responder:
 			return
 		history = conversation['history'] if conversation else []
 		try:
-			answer = fit_sms(self.ask(text, history))
+			answer = ' '.join(self.ask(text, history).split())
 		except (RuntimeError, subprocess.TimeoutExpired, OSError) as e:
 			log('claude error: %s' % e)
 			answer = ''
-		self._send(sender, answer or ERROR_REPLY)
+		# One SMS, or two at most for a longer answer
+		for part in split_sms(answer) if answer else [ERROR_REPLY]:
+			self._send(sender, part)
 		if conversation is None:
 			log('conversation with %s started' % sender)
 			conversation = self.conversations[sender] = {'history': []}

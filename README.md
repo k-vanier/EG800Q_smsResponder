@@ -1,6 +1,6 @@
 # EG800Q_smsResponder
 
-An SMS responder on FreeBSD. Every SMS received by a **Quectel EG800Q-EU** 4G module is answered by **Claude** (through the Claude Code CLI), in French, in a single SMS. It runs as a FreeBSD service, starts at boot, and logs every SMS exchanged.
+An SMS responder on FreeBSD. Every SMS received by a **Quectel EG800Q-EU** 4G module is answered by **Claude** (through the Claude Code CLI), in French, in one SMS, or two at most. It runs as a FreeBSD service, starts at boot, and logs every SMS exchanged.
 
 The folder also holds an SMS time server and small tools to test the module.
 
@@ -8,7 +8,7 @@ The folder also holds an SMS time server and small tools to test the module.
 
 ```
 phone ──SMS──▶ EG800Q-EU ──USB──▶ FreeBSD: sms_claude.py ──▶ claude -p (web search only)
-phone ◀──SMS── EG800Q-EU ◀──USB── FreeBSD: answer cut to 160 characters ◀──┘
+phone ◀──SMS── EG800Q-EU ◀──USB── FreeBSD: answer in 1 or 2 SMS ◀──────────┘
 ```
 
 1. `sms_claude.py` drives the module with AT commands over its USB port.
@@ -174,7 +174,7 @@ The service runs `daemon(8)`, which restarts the script 5 s after any exit (modu
 - Its first SMS must start with "Bonjour" or "Bonsoir" (any case, accents ignored). Otherwise the sender gets `La politesse avant tout : commencez par « Bonjour » et je répondrai avec plaisir à votre message.`, Claude is not called, and the conversation does not start.
 - The answer to that first SMS starts with Claude introducing itself as an AI by Anthropic that answers in SMS format, then answers the question if the greeting holds one.
 - Within a conversation, Claude gets the last 10 exchanges with that number, so follow-up questions keep their context.
-- Claude always answers in French, in at most 150 characters, plain text, without links.
+- Claude always answers in French, in plain text, without links. It aims at 150 characters (one SMS) and is told never to go beyond 300 (two SMS).
 
 ### Claude and security
 
@@ -187,7 +187,8 @@ Anyone who knows the number can send a prompt, so Claude is locked down:
 
 ### SMS text
 
-- Answers are sent in the GSM 7-bit alphabet, 160 characters at most: é, è, à, ù and Ç are kept, `ç` becomes `c`, `€` becomes `EUR`, `°` is dropped, other characters become `?`. Longer answers are cut and end with `...`.
+- An answer that fits in 160 characters goes out as one SMS. A longer one is split between two words into two SMS that start with `1/2` and `2/2`; beyond two SMS the second one is cut and ends with `...`. The politeness reminder and the error reply are always a single SMS.
+- SMS are sent in the GSM 7-bit alphabet: é, è, à, ù and Ç are kept, `ç` becomes `c`, `€` becomes `EUR`, `°` is dropped, other characters become `?`.
 - An SMS holding a character outside that alphabet (`ç`, `’`, an emoji) is sent by the phone in UCS2, which the module shows as hex. The script decodes it, emoji included. A single emoji alone without variation selector (`2764`) cannot be told from a number and stays as hex.
 - A question longer than 160 characters arrives as several SMS, answered one by one.
 
