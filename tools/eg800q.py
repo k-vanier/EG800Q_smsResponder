@@ -423,9 +423,13 @@ class Modem:
 		self.command('AT+CMGD=0,4', 30)
 		return len(messages)
 
-	def serve(self, on_sms):
+	def serve(self, on_sms, group_wait=0):
 		"""For each SMS stored in the module, forever: calls on_sms(sender, text),
 		then deletes the SMS, so the 10-message memory never fills up.
+
+		With group_wait (seconds), the SMS from one number are gathered until
+		that number has been silent for group_wait seconds, then on_sms gets
+		their texts joined, once. Without it, each SMS is handled on its own.
 
 		An SMS is kept for another try only if on_sms raises ModemError (the
 		reply could not be sent), at most MAX_TRIES times. An SMS already handled
@@ -434,9 +438,12 @@ class Modem:
 		+CMTI only reaches the port set by AT+QCFG="urc/port" (USB by default),
 		so the memory is also listed every few seconds. The battery voltage is
 		logged every BATTERY_PERIOD seconds."""
-		tries = {}
+		tries = {}  # group -> failed attempts to answer it
 		handled = set()  # (index, sender, stamp) handled but maybe not deleted
 		empty = {}  # (index, sender, stamp) -> scans that found it with no text
+		# group (the sender, or the SMS itself without group_wait) ->
+		# {'sender', 'messages': {key: (index, text)}, 'last': time of its newest SMS, 'retry': time}
+		groups = {}
 		next_scan = 0
 		last_battery = 0
 		while True:
@@ -472,24 +479,50 @@ class Modem:
 						continue
 					if key in handled:
 						log('SMS %d already handled, deleting it again' % index)
-					else:
-						log('SMS %d from %s: %r' % (index, sender, text))
-						if key not in tries:  # once, not again on each send retry
-							self.log_sms('IN', sender, text)
 						try:
-							on_sms(sender, text)
+							self.delete_sms(index)
+							handled.discard(key)
 						except ModemError as e:
-							tries[key] = tries.get(key, 0) + 1
-							log('error: %s (try %d/%d)' % (e, tries[key], MAX_TRIES))
-							if tries[key] < MAX_TRIES:
-								continue
-						tries.pop(key, None)
-						handled.add(key)
+							log('error: %s' % e)
+						continue
+					group = groups.setdefault(sender if group_wait else key,
+						{'sender': sender, 'messages': {}, 'last': 0, 'retry': 0})
+					if key not in group['messages']:
+						# Logged once, not again on each scan or send retry
+						group['messages'][key] = (index, text)
+						group['last'] = time.time()
+						log('SMS %d from %s: %r' % (index, sender, text))
+						self.log_sms('IN', sender, text)
+			for gid, group in list(groups.items()):
+				now = time.time()
+				if now - group['last'] < group_wait or now < group['retry']:
+					continue
+				# Oldest first: by network time stamp, then index
+				parts = [text for key, (index, text) in sorted(group['messages'].items(),
+					key=lambda item: (item[0][2], item[1][0]))]
+				text = ' '.join(part for part in parts if part)
+				if len(parts) > 1:
+					log('%d SMS from %s answered together: %r' % (len(parts), group['sender'], text))
+				try:
+					on_sms(group['sender'], text)
+				except ModemError as e:
+					tries[gid] = tries.get(gid, 0) + 1
+					log('error: %s (try %d/%d)' % (e, tries[gid], MAX_TRIES))
+					if tries[gid] < MAX_TRIES:
+						group['retry'] = time.time() + SCAN_PERIOD
+						continue
+				tries.pop(gid, None)
+				del groups[gid]
+				for key, (index, text) in group['messages'].items():
+					handled.add(key)
 					try:
 						self.delete_sms(index)
 						handled.discard(key)
 					except ModemError as e:
 						log('error: %s' % e)
+			if groups:
+				# Check often whether a waiting number sent more
+				next_scan = min(next_scan, time.time() + 1)
 			line = self._readline().strip()
 			if line:
 				self._urc(line)
