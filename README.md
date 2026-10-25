@@ -184,7 +184,7 @@ The service runs `daemon(8)`, which restarts the script 5 s after any exit (modu
 
 ### File replies
 
-`--owner` and `--file-reply` turn keywords into status requests, e.g. the summary line that [c411_transmission](../c411_transmission) writes:
+`--owner` and `--file-reply` turn keywords into status requests, e.g. the summary line that [c411_transmission](https://github.com/k-vanier/c411_transmission) writes:
 
 ```sh
 sysrc sms_claude_args="--claude /usr/local/bin/claude --owner +33612345678 --file-reply tor /var/log/torrents_status"
