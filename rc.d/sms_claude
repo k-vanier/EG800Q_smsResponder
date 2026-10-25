@@ -12,7 +12,8 @@
 #   sms_claude_port="usb"            port USB du module (pyusb, règle devd/eg800q.conf),
 #                                    ou "auto" pour l'adaptateur FTDI, ou /dev/cuaU0
 #   sms_claude_args="--claude /usr/local/bin/claude"
-#                                    options de sms_claude.py (chemin de claude, --allow...)
+#                                    options de sms_claude.py (chemin de claude, --allow,
+#                                    --owner +336... --file-reply tor /var/log/torrents_status...)
 #   sms_claude_dir="/usr/local/libexec/eg800q"     dossier de sms_claude.py et eg800q.py
 #   sms_claude_python="/usr/local/bin/python3"
 #   sms_claude_sms_log="/var/log/sms"   une ligne par SMS reçu (IN) ou envoyé (OUT),

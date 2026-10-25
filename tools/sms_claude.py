@@ -15,6 +15,7 @@
 # Usage: python3 sms_claude.py PORT [--allow +336...] [--model NAME]
 #                              [--conversation-timeout MINUTES] [--group-wait SECONDS]
 #                              [--claude PATH] [--humour] [--sms-log FILE] [--trace]
+#                              [--owner +336... --file-reply KEYWORD FILE]
 #   PORT: usb (module's USB port), auto (FTDI adapter), /dev/cuaU0, /dev/ttyUSB0
 # Auth: export CLAUDE_CODE_OAUTH_TOKEN=... (from "claude setup-token")
 #       or ANTHROPIC_API_KEY=...
@@ -34,6 +35,7 @@ from eg800q import Modem, fit_sms, is_phone_number, log, split_sms
 CLAUDE_TIMEOUT = 120  # seconds
 MAX_TURNS = 5  # enough for a few web searches before the answer
 MAX_HISTORY = 10  # previous exchanges of the conversation given to Claude
+FILE_REPLY_MAX = 1000  # characters read from a --file-reply file (two SMS hold 312)
 GREETINGS = ('bonjour', 'bonsoir')
 ERROR_REPLY = 'Désolé, je ne peux pas répondre pour le moment.'
 POLITENESS_REPLY = ('La politesse avant tout : commencez par « Bonjour » '
@@ -116,12 +118,25 @@ def ask_claude(text, history, model, claude='claude', humour=False):
 	return result.stdout.strip()
 
 
+def read_file_reply(path):
+	"""Contents of a --file-reply file, or a short error to send instead."""
+	try:
+		with open(path, encoding='utf-8', errors='replace') as f:
+			text = f.read(FILE_REPLY_MAX)
+	except OSError as e:
+		log('cannot read %s: %s' % (path, e))
+		return 'Impossible de lire %s : %s' % (path, e.strerror or e)
+	return text if text.strip() else '%s est vide' % path
+
+
 class Responder:
-	def __init__(self, send_sms, allow, conversation_timeout, ask):
+	def __init__(self, send_sms, allow, conversation_timeout, ask, owners=(), file_replies=None):
 		self.send_sms = send_sms
 		self.allow = allow
 		self.timeout = conversation_timeout  # minutes
 		self.ask = ask  # ask(text, history) -> Claude's answer
+		self.owners = set(owners)
+		self.file_replies = file_replies or {}  # keyword (lower case) -> file path
 		# Number -> {'last': time of its last answered SMS, 'history': [(message, reply)]}
 		self.conversations = {}
 
@@ -132,6 +147,14 @@ class Responder:
 
 	def on_sms(self, sender, text):
 		if not is_phone_number(sender) or not text:
+			return
+		# An owner's keyword gets the file's contents, without greeting nor Claude,
+		# and leaves the conversation as it is
+		path = self.file_replies.get(text.strip().lower()) if sender in self.owners else None
+		if path:
+			log('%s asked for %s' % (sender, path))
+			for part in split_sms(read_file_reply(path)):
+				self._send(sender, part)
 			return
 		if self.allow and sender not in self.allow:
 			log('ignored, %s is not in --allow' % sender)
@@ -177,6 +200,10 @@ def main():
 		help='a conversation ends after this many minutes without SMS from its number (default: 30)')
 	parser.add_argument('--group-wait', type=float, default=5, metavar='SECONDS',
 		help='SMS from one number arriving less than this apart are answered together (default: 5, 0 to answer each one)')
+	parser.add_argument('--owner', action='append', default=[], metavar='NUMBER',
+		help='number allowed to use the --file-reply keywords (repeatable, e.g. +33612345678)')
+	parser.add_argument('--file-reply', action='append', nargs=2, default=[], metavar=('KEYWORD', 'FILE'),
+		help='an --owner SMS made of KEYWORD alone (any case) gets the contents of FILE, in two SMS at most (repeatable)')
 	parser.add_argument('--trace', action='store_true', help='log every byte exchanged with the module')
 	parser.add_argument('--humour', action='store_true',
 		help='ask Claude for a touch of humour in its answers')
@@ -185,6 +212,8 @@ def main():
 	parser.add_argument('--claude', default='claude', metavar='PATH',
 		help='claude executable (default: claude, found in PATH)')
 	args = parser.parse_args()
+	if args.file_reply and not args.owner:
+		parser.error('--file-reply needs at least one --owner')
 
 	if not os.environ.get('CLAUDE_CODE_OAUTH_TOKEN') and not os.environ.get('ANTHROPIC_API_KEY'):
 		log('warning: neither CLAUDE_CODE_OAUTH_TOKEN nor ANTHROPIC_API_KEY is set')
@@ -192,7 +221,8 @@ def main():
 	modem = Modem(args.port, args.trace, args.sms_log)
 	log('purged %d SMS already in memory' % modem.purge_sms())
 	responder = Responder(modem.send_sms, args.allow, args.conversation_timeout,
-		lambda text, history: ask_claude(text, history, args.model, args.claude, args.humour))
+		lambda text, history: ask_claude(text, history, args.model, args.claude, args.humour),
+		args.owner, {keyword.lower(): path for keyword, path in args.file_reply})
 	log('ready on %s, waiting for SMS' % modem.port)
 	modem.serve(responder.on_sms, args.group_wait)
 

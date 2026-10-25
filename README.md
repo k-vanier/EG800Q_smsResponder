@@ -164,6 +164,8 @@ The service runs `daemon(8)`, which restarts the script 5 s after any exit (modu
 | `--model NAME` | Passed to `claude --model` |
 | `--humour` | Asks Claude for a touch of humour (a quip, a small joke), never at the cost of accuracy or length |
 | `--allow NUMBER` | Only answer this number (repeatable). Default: every phone number |
+| `--owner NUMBER` | Number allowed to use the `--file-reply` keywords (repeatable) |
+| `--file-reply KEYWORD FILE` | An SMS from an `--owner` made of `KEYWORD` alone (any case) is answered with the contents of `FILE`, in two SMS at most, without greeting nor Claude (repeatable) |
 | `--conversation-timeout MINUTES` | Silence that ends a conversation (default 30) |
 | `--group-wait SECONDS` | SMS from one number less than this apart are joined and answered once (default 5, `0` to answer each SMS on its own) |
 | `--sms-log FILE` | Append one line per SMS received or sent |
@@ -178,6 +180,17 @@ The service runs `daemon(8)`, which restarts the script 5 s after any exit (modu
 - The bot is called Robert3000. The script itself answers that first SMS with `yo je suis Robert3000 le bot stylé qui repond à toutes tes interogations`, word for word: alone for a bare greeting ("Bonjour !", Claude is not called), followed by Claude's answer if the greeting asks something ("Bonjour, quelle heure est-il ?"). The name and the sentence are `BOT_NAME` and `INTRO_TEXT` at the top of `tools/sms_claude.py`.
 - Within a conversation, Claude gets the last 10 exchanges with that number, so follow-up questions keep their context.
 - Claude answers directly, without greeting, introducing itself or asking how it can help, always in French, in plain text, without links. It aims at 150 characters (one SMS) and is told never to go beyond 300 (two SMS).
+
+### File replies
+
+`--owner` and `--file-reply` turn keywords into status requests, e.g. the summary line that [c411_transmission](../c411_transmission) writes:
+
+```sh
+sysrc sms_claude_args="--claude /usr/local/bin/claude --owner +33612345678 --file-reply tor /var/log/torrents_status"
+service sms_claude restart
+```
+
+An SMS `tor` (or `Tor`, `TOR`) from `+33612345678` is answered with the file's contents, read by the service user (the file must be readable by it). No "Bonjour" is needed, Claude is not called, and a running conversation is left as it is. Any other number sending `tor` gets the usual behaviour. If the file is missing or unreadable, the owner gets `Impossible de lire ...`.
 
 ### Claude and security
 
