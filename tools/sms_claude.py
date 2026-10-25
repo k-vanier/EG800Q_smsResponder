@@ -165,6 +165,10 @@ class Responder:
 			del self.conversations[sender]
 			conversation = None
 		asks = greeting(text) if conversation is None else True
+		intro = conversation is None
+		if asks is None and sender in self.owners:
+			# Owners need no greeting: Claude answers at once, without the introduction
+			asks, intro = True, False
 		if asks is None:
 			log('no greeting from %s, asking for politeness' % sender)
 			self._send(sender, fit_sms(POLITENESS_REPLY))
@@ -176,7 +180,7 @@ class Responder:
 				answer = ' '.join(self.ask(text, history).split())
 			except (RuntimeError, subprocess.TimeoutExpired, OSError) as e:
 				log('claude error: %s' % e)
-		if conversation is None and (answer or not asks):
+		if intro and (answer or not asks):
 			# The introduction comes from here, word for word, not from Claude
 			answer = (INTRO_TEXT + ' ' + answer).strip()
 		# One SMS, or two at most for a longer answer
@@ -201,7 +205,7 @@ def main():
 	parser.add_argument('--group-wait', type=float, default=5, metavar='SECONDS',
 		help='SMS from one number arriving less than this apart are answered together (default: 5, 0 to answer each one)')
 	parser.add_argument('--owner', action='append', default=[], metavar='NUMBER',
-		help='number allowed to use the --file-reply keywords (repeatable, e.g. +33612345678)')
+		help='number that needs no greeting and may use the --file-reply keywords (repeatable, e.g. +33612345678)')
 	parser.add_argument('--file-reply', action='append', nargs=2, default=[], metavar=('KEYWORD', 'FILE'),
 		help='an --owner SMS made of KEYWORD alone (any case) gets the contents of FILE, in two SMS at most (repeatable)')
 	parser.add_argument('--trace', action='store_true', help='log every byte exchanged with the module')
